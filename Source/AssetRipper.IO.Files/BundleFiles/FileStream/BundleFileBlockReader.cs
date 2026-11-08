@@ -1,4 +1,5 @@
-﻿using AssetRipper.IO.Files.Exceptions;
+﻿using AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
+using AssetRipper.IO.Files.Exceptions;
 using AssetRipper.IO.Files.Streams;
 using AssetRipper.IO.Files.Streams.Smart;
 using K4os.Compression.LZ4;
@@ -8,10 +9,11 @@ namespace AssetRipper.IO.Files.BundleFiles.FileStream;
 
 internal sealed class BundleFileBlockReader : IDisposable
 {
-	public BundleFileBlockReader(SmartStream stream, BlocksInfo blocksInfo)
+	public BundleFileBlockReader(SmartStream stream, BlocksInfo blocksInfo, UnityCnDecryptor? unityCn = null)
 	{
 		m_stream = stream;
 		m_blocksInfo = blocksInfo;
+		m_unityCn = unityCn;
 		m_dataOffset = stream.Position;
 	}
 
@@ -72,6 +74,11 @@ internal sealed class BundleFileBlockReader : IDisposable
 			else
 			{
 				CompressionType compressType = block.CompressionType;
+				bool isEncrypted = (block.Flags & UnityCnDecryptor.EncryptedBlockFlag) != 0;
+				if (isEncrypted && compressType is not (CompressionType.Lz4 or CompressionType.Lz4HC))
+				{
+					throw new NotSupportedException($"UnityCN encrypted block with '{compressType}' compression in '{entry.PathFixed}' is not supported.");
+				}
 				if (compressType is CompressionType.None)
 				{
 					blockStreamOffset = m_dataOffset + blockCompressedOffset;
@@ -98,6 +105,14 @@ internal sealed class BundleFileBlockReader : IDisposable
 							uint uncompressedSize = block.UncompressedSize;
 							byte[] uncompressedBytes = new byte[uncompressedSize];
 							byte[] compressedBytes = new BinaryReader(m_stream).ReadBytes((int)block.CompressedSize);
+							if (isEncrypted)
+							{
+								if (m_unityCn is null)
+								{
+									throw new UnityCnKeyException($"Block {blockIndex} of '{entry.PathFixed}' is UnityCN encrypted, but the bundle has no UnityCN header.");
+								}
+								m_unityCn.DecryptBlock(compressedBytes, blockIndex);
+							}
 							int bytesWritten = LZ4Codec.Decode(compressedBytes, uncompressedBytes);
 							if (bytesWritten < 0)
 							{
@@ -212,6 +227,7 @@ internal sealed class BundleFileBlockReader : IDisposable
 	private readonly SmartStream m_stream;
 	private readonly BlocksInfo m_blocksInfo = new();
 	private readonly long m_dataOffset;
+	private readonly UnityCnDecryptor? m_unityCn;
 
 	private readonly SmartStream m_cachedBlockStream = SmartStream.CreateNull();
 	private byte[]? m_cachedBlockArray;

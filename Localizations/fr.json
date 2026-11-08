@@ -144,6 +144,7 @@
     "text_asset_format_parse_description": "Exportez sous forme de fichier texte brut, mais essayez de deviner l'extension de fichier correcte (par exemple, les fichiers JSON obtiennent l'extension .json).",
     "text_asset_format_text": "Texte Brut",
     "text_asset_format_text_description": "Exporter sous forme de fichier texte brut (.txt).",
+    "unitycn_key": "Clé UnityCN (16, 24 ou 32 caractères, ou 32 hexadécimaux)",
     "welcome_title": "Bienvenue Dans AssetRipper",
     "default_version": "Version par défaut",
     "height": "Hauteur",

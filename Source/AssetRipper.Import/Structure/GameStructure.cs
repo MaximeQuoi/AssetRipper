@@ -7,6 +7,7 @@ using AssetRipper.Import.Structure.Assembly;
 using AssetRipper.Import.Structure.Assembly.Managers;
 using AssetRipper.Import.Structure.Platforms;
 using AssetRipper.IO.Files;
+using AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
 using AssetRipper.IO.Files.ResourceFiles;
 
 namespace AssetRipper.Import.Structure;
@@ -23,6 +24,7 @@ public sealed class GameStructure : IDisposable
 	{
 		Logger.SendStatusChange("loading_step_detect_platform");
 		FileSystem = fileSystem;
+		ConfigureUnityCnKey(configuration.ImportSettings.UnityCnKey);
 		PlatformChecker.CheckPlatform(paths, fileSystem, out PlatformGameStructure? platformStructure, out MixedGameStructure? mixedStructure);
 		PlatformStructure = platformStructure;
 		PlatformStructure?.CollectFiles(configuration.ImportSettings.IgnoreStreamingAssets);
@@ -42,6 +44,23 @@ public sealed class GameStructure : IDisposable
 		if (!FileCollection.HasAnyAssetCollections())
 		{
 			Logger.Log(LogType.Warning, LogCategory.Import, "The game structure processor could not find any valid assets.");
+		}
+	}
+
+	private static void ConfigureUnityCnKey(string? key)
+	{
+		try
+		{
+			UnityCnKey.Set(key);
+			if (UnityCnKey.Current is not null)
+			{
+				Logger.Info(LogCategory.Import, $"UnityCN key configured ({UnityCnKey.Candidates.Count} candidate interpretation(s)).");
+			}
+		}
+		catch (ArgumentException ex)
+		{
+			UnityCnKey.Set(null);
+			Logger.Error(LogCategory.Import, ex.Message);
 		}
 	}
 

@@ -1,4 +1,5 @@
 using AssetRipper.IO.Endian;
+using AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
 using AssetRipper.IO.Files.Exceptions;
 using AssetRipper.IO.Files.Extensions;
 using AssetRipper.IO.Files.ResourceFiles;
@@ -12,6 +13,14 @@ public sealed class FileStreamBundleFile : FileContainer
 	public FileStreamBundleHeader Header { get; } = new();
 	public BlocksInfo BlocksInfo { get; private set; } = new();
 	public DirectoryInfo<FileStreamNode> DirectoryInfo { get; set; } = new();
+	/// <summary>
+	/// The UnityCN decryptor, if this bundle is UnityCN encrypted.
+	/// </summary>
+	public UnityCnDecryptor? UnityCn { get; private set; }
+	/// <summary>
+	/// True if 0x200 is the old UnityCN encryption flag rather than <see cref="BundleFlags.BlockInfoNeedPaddingAtStart"/>.
+	/// </summary>
+	private bool m_usesOldEncryptionFlag;
 
 	public FileStreamBundleFile()
 	{
@@ -27,6 +36,10 @@ public sealed class FileStreamBundleFile : FileContainer
 	{
 		long basePosition = stream.Position;
 		Header.Read(stream);
+		if (UnityCnDecryptor.IsEncrypted(Header, out m_usesOldEncryptionFlag))
+		{
+			UnityCn = UnityCnDecryptor.Read(stream, UnityCnKey.Candidates, NameFixed);
+		}
 		long headerSize = stream.Position - basePosition;
 		ReadFileStreamMetadata(stream, basePosition);//ReadBlocksInfoAndDirectory
 		ReadFileStreamData(stream, basePosition, headerSize);//ReadBlocks and ReadFiles
@@ -144,12 +157,12 @@ public sealed class FileStreamBundleFile : FileContainer
 				stream.Align(16);
 			}
 		}
-		if (Header.Flags.GetBlockInfoNeedPaddingAtStart())
+		if (Header.Flags.GetBlockInfoNeedPaddingAtStart() && !m_usesOldEncryptionFlag)
 		{
 			stream.Align(16);
 		}
 
-		using BundleFileBlockReader blockReader = new BundleFileBlockReader(stream, BlocksInfo);
+		using BundleFileBlockReader blockReader = new BundleFileBlockReader(stream, BlocksInfo, UnityCn);
 		foreach (FileStreamNode entry in DirectoryInfo.Nodes)
 		{
 			try

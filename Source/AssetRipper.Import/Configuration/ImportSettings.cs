@@ -40,11 +40,21 @@ public sealed record class ImportSettings
 	[JsonConverter(typeof(UnityVersionJsonConverter))]
 	public UnityVersion TargetVersion { get; set; }
 
+	/// <summary>
+	/// The decryption key for UnityCN (Unity China / Tuanjie) encrypted asset bundles.
+	/// </summary>
+	/// <remarks>
+	/// Accepts 32 hexadecimal characters, 24 characters (Base64 or raw key) or 32 characters (raw key).
+	/// See <see cref="AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn.UnityCnKey"/>.
+	/// </remarks>
+	public string? UnityCnKey { get; set; }
+
 	public void Log()
 	{
 		Logger.Info(LogCategory.General, $"{nameof(ScriptContentLevel)}: {ScriptContentLevel}");
 		Logger.Info(LogCategory.General, $"{nameof(StreamingAssetsMode)}: {StreamingAssetsMode}");
 		Logger.Info(LogCategory.General, $"{nameof(DefaultVersion)}: {DefaultVersion}");
 		Logger.Info(LogCategory.General, $"{nameof(TargetVersion)}: {TargetVersion}");
+		Logger.Info(LogCategory.General, $"{nameof(UnityCnKey)}: {(string.IsNullOrWhiteSpace(UnityCnKey) ? "none" : "set")}");
 	}
 }

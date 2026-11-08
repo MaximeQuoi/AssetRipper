@@ -72,6 +72,14 @@ public sealed partial class SettingsPage : DefaultPage
 							{
 								using (new Div(writer).WithClass("col").End())
 								{
+									WriteTextAreaForUnityCnKey(writer);
+								}
+							}
+
+							using (new Div(writer).WithClass("row").End())
+							{
+								using (new Div(writer).WithClass("col").End())
+								{
 									WriteDropDownForBundledAssetsExportMode(writer);
 								}
 								using (new Div(writer).WithClass("col").End())
@@ -212,6 +220,18 @@ public sealed partial class SettingsPage : DefaultPage
 			.WithId(nameof(Configuration.ImportSettings.DefaultVersion))
 			.WithName(nameof(Configuration.ImportSettings.DefaultVersion))
 			.WithValue(Configuration.ImportSettings.DefaultVersion.ToString())
+			.Close();
+	}
+
+	private static void WriteTextAreaForUnityCnKey(TextWriter writer)
+	{
+		new Label(writer).WithClass("form-label").WithFor(nameof(Configuration.ImportSettings.UnityCnKey)).Close(Localization.UnitycnKey);
+		new Input(writer)
+			.WithType("text")
+			.WithClass("form-control font-monospace")
+			.WithId(nameof(Configuration.ImportSettings.UnityCnKey))
+			.WithName(nameof(Configuration.ImportSettings.UnityCnKey))
+			.WithValue(Configuration.ImportSettings.UnityCnKey ?? "")
 			.Close();
 	}
 

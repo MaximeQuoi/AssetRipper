@@ -265,6 +265,7 @@
     "there_are_no_keys_for_this_data_type": "There are no keys for this data type.",
     "tipping_message": "If you like AssetRipper, please consider tipping:",
     "transform": "Transform",
+    "unitycn_key": "UnityCN Key (16, 24 or 32 characters, or 32 hex)",
     "vertex_count": "Vertex Count",
     "view_loaded_files": "View Loaded Files",
     "warning_this_directory_is_not_empty_all_content_will_be_deleted": "Warning: this directory is not empty. All content will be deleted.",

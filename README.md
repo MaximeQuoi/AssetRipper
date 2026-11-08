@@ -34,3 +34,22 @@ The development of this project has a dedicated [Discord server](https://discord
 * AssetRipper is not sponsored by or affiliated with Unity Technologies or its affiliates.
 * "Unity" is a registered trademark of Unity Technologies or its affiliates in the U.S. and elsewhere.
 * The [Credits](https://assetripper.github.io/AssetRipper/articles/Credits.html) page contains a list of attributions.
+
+## UnityCN (Unity China / Tuanjie) encrypted bundles — fork addition
+
+This fork decrypts UnityCN encrypted asset bundles (header flag `0x400`, or `0x200` before 2020.3.34 / 2021.3.2 / 2022.1.1).
+Set the key in **Settings → UnityCN Key**, or in the `ASSETRIPPER_UNITYCN_KEY` environment variable.
+
+Accepted key formats:
+
+| Format | Example length | AES key |
+|---|---|---|
+| Hexadecimal | 32 characters | AES-128 |
+| Raw key string | 24 characters | AES-192 |
+| Base64 | 24 characters | AES-128 |
+| Raw key string | 32 characters | AES-256 |
+| Raw key string | 16 characters | AES-128 |
+| Hexadecimal | 48 / 64 characters | AES-192 / AES-256 |
+
+When a key is ambiguous (e.g. 32 hex characters, or 24 characters that are valid Base64), every interpretation is tried
+and the one that decrypts the bundle signature is kept. Prefixes `hex:`, `base64:` and `raw:` force an interpretation.
