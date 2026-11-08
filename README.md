@@ -53,3 +53,16 @@ Accepted key formats:
 
 When a key is ambiguous (e.g. 32 hex characters, or 24 characters that are valid Base64), every interpretation is tried
 and the one that decrypts the bundle signature is kept. Prefixes `hex:`, `base64:` and `raw:` force an interpretation.
+Several keys can be given, separated by `;` or new lines.
+
+### Finding the keys from an Il2CppDumper dump
+
+Instead of a key, select the `dump.cs` or `stringliteral.json` produced by [Il2CppDumper](https://github.com/Perfare/Il2CppDumper)
+in **Settings → UnityCN key file** (or set `ASSETRIPPER_UNITYCN_KEYFILE`).
+Every string with a possible key length is extracted (strings next to words such as `key`, `secret`, `crypt` or `aes` first),
+then tried on each encrypted bundle: the decrypted signature `#$unity3dchina!@` identifies the right key without false positives.
+A game using several keys is handled, since each bundle keeps the key that decrypts it, and keys already found are tried first.
+The keys found are written to the log and listed on the settings page after loading.
+
+`stringliteral.json` contains every string literal of the code, so it is the best choice when the key is passed directly to
+`AssetBundle.SetAssetBundleDecryptKey("...")`; `dump.cs` only contains the values of `const` fields.

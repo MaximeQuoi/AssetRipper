@@ -24,7 +24,7 @@ public sealed class GameStructure : IDisposable
 	{
 		Logger.SendStatusChange("loading_step_detect_platform");
 		FileSystem = fileSystem;
-		ConfigureUnityCnKey(configuration.ImportSettings.UnityCnKey);
+		ConfigureUnityCnKey(configuration.ImportSettings.UnityCnKey, configuration.ImportSettings.UnityCnKeyFile);
 		PlatformChecker.CheckPlatform(paths, fileSystem, out PlatformGameStructure? platformStructure, out MixedGameStructure? mixedStructure);
 		PlatformStructure = platformStructure;
 		PlatformStructure?.CollectFiles(configuration.ImportSettings.IgnoreStreamingAssets);
@@ -40,6 +40,7 @@ public sealed class GameStructure : IDisposable
 		Logger.SendStatusChange("loading_step_begin_scheme_processing");
 
 		InitializeGameCollection(configuration.ImportSettings.DefaultVersion, configuration.ImportSettings.TargetVersion);
+		LogFoundUnityCnKeys();
 
 		if (!FileCollection.HasAnyAssetCollections())
 		{
@@ -47,20 +48,37 @@ public sealed class GameStructure : IDisposable
 		}
 	}
 
-	private static void ConfigureUnityCnKey(string? key)
+	private static void ConfigureUnityCnKey(string? key, string? keyFile)
 	{
 		try
 		{
-			UnityCnKey.Set(key);
-			if (UnityCnKey.Current is not null)
+			int count = UnityCnKey.Configure(key, keyFile);
+			if (count > 0)
 			{
-				Logger.Info(LogCategory.Import, $"UnityCN key configured ({UnityCnKey.Candidates.Count} candidate interpretation(s)).");
+				Logger.Info(LogCategory.Import, $"UnityCN: {count} key candidate(s) configured.");
 			}
 		}
-		catch (ArgumentException ex)
+		catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException)
 		{
-			UnityCnKey.Set(null);
-			Logger.Error(LogCategory.Import, ex.Message);
+			Logger.Error(LogCategory.Import, $"UnityCN: {ex.Message}");
+			try
+			{
+				// Keep what is still usable
+				UnityCnKey.Configure(null, keyFile);
+			}
+			catch (Exception)
+			{
+				UnityCnKey.Configure(null, null);
+			}
+		}
+	}
+
+	private static void LogFoundUnityCnKeys()
+	{
+		IReadOnlyList<UnityCnKeyCandidate> found = UnityCnKey.FoundKeys;
+		foreach (UnityCnKeyCandidate candidate in found)
+		{
+			Logger.Info(LogCategory.Import, $"UnityCN key found: {candidate}");
 		}
 	}
 

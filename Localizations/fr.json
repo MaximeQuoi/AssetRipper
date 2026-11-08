@@ -145,6 +145,8 @@
     "text_asset_format_text": "Texte Brut",
     "text_asset_format_text_description": "Exporter sous forme de fichier texte brut (.txt).",
     "unitycn_key": "Clé UnityCN (16, 24 ou 32 caractères, ou 32 hexadécimaux)",
+    "unitycn_key_file": "Fichier de clés UnityCN (dump.cs ou stringliteral.json d'Il2CppDumper)",
+    "unitycn_keys_found": "Clés UnityCN trouvées",
     "welcome_title": "Bienvenue Dans AssetRipper",
     "default_version": "Version par défaut",
     "height": "Hauteur",

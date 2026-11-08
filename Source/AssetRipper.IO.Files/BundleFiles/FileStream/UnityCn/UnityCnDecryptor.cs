@@ -34,11 +34,11 @@ public sealed class UnityCnDecryptor
 	private readonly byte[] m_sub = new byte[0x10];
 
 	/// <summary>
-	/// The AES key which successfully decrypted the signature.
+	/// The key which successfully decrypted the signature.
 	/// </summary>
-	public byte[] Key { get; }
+	public UnityCnKeyCandidate Key { get; }
 
-	private UnityCnDecryptor(byte[] key, ReadOnlySpan<byte> infoBytes)
+	private UnityCnDecryptor(UnityCnKeyCandidate key, ReadOnlySpan<byte> infoBytes)
 	{
 		Key = key;
 		Span<byte> nibbles = stackalloc byte[0x20];
@@ -58,27 +58,26 @@ public sealed class UnityCnDecryptor
 
 	/// <summary>
 	/// Reads the encryption data at the current position of <paramref name="stream"/> and validates it
-	/// against each candidate key.
+	/// against the keys configured in <see cref="UnityCnKey"/>.
 	/// </summary>
-	/// <exception cref="UnityCnKeyException">No candidate key is valid for this bundle.</exception>
-	public static UnityCnDecryptor Read(Stream stream, IReadOnlyList<byte[]> candidateKeys, string bundleName)
+	/// <exception cref="UnityCnKeyException">No configured key is valid for this bundle.</exception>
+	public static UnityCnDecryptor Read(Stream stream, string bundleName)
 	{
 		Span<byte> data = stackalloc byte[HeaderDataSize];
 		stream.ReadExactly(data);
-		return Create(data, candidateKeys, bundleName);
+		return Create(data, UnityCnKey.GetCandidates(), bundleName, UnityCnKey.ReportFound);
 	}
 
-	public static UnityCnDecryptor Create(ReadOnlySpan<byte> data, IReadOnlyList<byte[]> candidateKeys, string bundleName)
+	/// <summary>
+	/// Validates the encryption data against each candidate key, in order.
+	/// </summary>
+	/// <param name="onFound">Called with the candidate that decrypted the signature.</param>
+	/// <exception cref="UnityCnKeyException">No candidate key is valid for this bundle.</exception>
+	public static UnityCnDecryptor Create(ReadOnlySpan<byte> data, IEnumerable<UnityCnKeyCandidate> candidates, string bundleName, Action<UnityCnKeyCandidate>? onFound = null)
 	{
 		if (data.Length < HeaderDataSize)
 		{
 			throw new ArgumentException("Not enough UnityCN header data.", nameof(data));
-		}
-
-		if (candidateKeys.Count == 0)
-		{
-			throw new UnityCnKeyException($"'{bundleName}' is UnityCN encrypted, but no decryption key was provided. " +
-				$"Set the UnityCN key in the settings or in the {UnityCnKey.EnvironmentVariable} environment variable.");
 		}
 
 		ReadOnlySpan<byte> infoBytes = data.Slice(4, 16);
@@ -87,10 +86,12 @@ public sealed class UnityCnDecryptor
 		ReadOnlySpan<byte> signatureKey = data.Slice(53, 16);
 
 		Span<byte> decrypted = stackalloc byte[16];
-		foreach (byte[] key in candidateKeys)
+		using Aes aes = Aes.Create();
+		int tried = 0;
+		foreach (UnityCnKeyCandidate candidate in candidates)
 		{
-			using Aes aes = Aes.Create();
-			aes.Key = key;
+			tried++;
+			aes.Key = candidate.Key;
 
 			XorWithEncryptedKey(aes, signatureKey, signatureBytes, decrypted);
 			if (!decrypted.SequenceEqual(SignatureBytes))
@@ -99,10 +100,17 @@ public sealed class UnityCnDecryptor
 			}
 
 			XorWithEncryptedKey(aes, infoKey, infoBytes, decrypted);
-			return new UnityCnDecryptor(key, decrypted);
+			onFound?.Invoke(candidate);
+			return new UnityCnDecryptor(candidate, decrypted);
 		}
 
-		throw new UnityCnKeyException($"The UnityCN key is not valid for '{bundleName}' (signature mismatch).");
+		if (tried == 0)
+		{
+			throw new UnityCnKeyException($"'{bundleName}' is UnityCN encrypted, but no decryption key was provided. " +
+				$"Set the UnityCN key or a key file (Il2CppDumper dump.cs / stringliteral.json) in the settings, " +
+				$"or the {UnityCnKey.EnvironmentVariable} / {UnityCnKey.KeyFileEnvironmentVariable} environment variables.");
+		}
+		throw new UnityCnKeyException($"None of the {tried} UnityCN key candidate(s) is valid for '{bundleName}' (signature mismatch).");
 	}
 
 	private static ReadOnlySpan<byte> SignatureBytes => "#$unity3dchina!@"u8;

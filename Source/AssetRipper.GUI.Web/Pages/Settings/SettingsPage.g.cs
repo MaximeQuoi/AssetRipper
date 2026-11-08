@@ -30,6 +30,9 @@ partial class SettingsPage
 			case nameof(ImportSettings.UnityCnKey):
 				Configuration.ImportSettings.UnityCnKey = value;
 				break;
+			case nameof(ImportSettings.UnityCnKeyFile):
+				Configuration.ImportSettings.UnityCnKeyFile = value;
+				break;
 			case nameof(ProcessingSettings.BundledAssetsExportMode):
 				Configuration.ProcessingSettings.BundledAssetsExportMode = TryParseEnum<BundledAssetsExportMode>(value);
 				break;

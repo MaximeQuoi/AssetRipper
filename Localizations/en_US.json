@@ -266,6 +266,8 @@
     "tipping_message": "If you like AssetRipper, please consider tipping:",
     "transform": "Transform",
     "unitycn_key": "UnityCN Key (16, 24 or 32 characters, or 32 hex)",
+    "unitycn_key_file": "UnityCN key file (Il2CppDumper dump.cs or stringliteral.json)",
+    "unitycn_keys_found": "UnityCN keys found",
     "vertex_count": "Vertex Count",
     "view_loaded_files": "View Loaded Files",
     "warning_this_directory_is_not_empty_all_content_will_be_deleted": "Warning: this directory is not empty. All content will be deleted.",

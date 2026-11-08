@@ -38,7 +38,7 @@ public sealed class FileStreamBundleFile : FileContainer
 		Header.Read(stream);
 		if (UnityCnDecryptor.IsEncrypted(Header, out m_usesOldEncryptionFlag))
 		{
-			UnityCn = UnityCnDecryptor.Read(stream, UnityCnKey.Candidates, NameFixed);
+			UnityCn = UnityCnDecryptor.Read(stream, NameFixed);
 		}
 		long headerSize = stream.Position - basePosition;
 		ReadFileStreamMetadata(stream, basePosition);//ReadBlocksInfoAndDirectory

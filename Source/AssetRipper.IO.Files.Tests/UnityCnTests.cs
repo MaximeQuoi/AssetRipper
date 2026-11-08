@@ -110,7 +110,7 @@ public class UnityCnTests
 		}
 		finally
 		{
-			UnityCnKey.Set(null);
+			UnityCnKey.Configure(null, null);
 		}
 	}
 
@@ -126,7 +126,130 @@ public class UnityCnTests
 		}
 		finally
 		{
-			UnityCnKey.Set(null);
+			UnityCnKey.Configure(null, null);
+		}
+	}
+
+	private const string SampleDump = """
+		// Namespace: Game.Loading
+		public class BundleLoader : MonoBehaviour // TypeDefIndex: 4242
+		{
+			// Fields
+			private const string BundleKey = "Tuanjie-Key-24-Chars-OK!"; // 0x0
+			public const string Version = "1.0.0";
+			private const string Unrelated = "abcdefghijklmnop";
+			private const string EscapedQuote = "\"quoted\" value here!";
+			private const char Quote = '"';
+
+			// Methods
+			// RVA: 0x1A2B3C Offset: 0x1A2B3C VA: 0x1A2B3C
+			public void .ctor() { }
+		}
+		""";
+
+	private const string SampleStringLiteral = """
+		[
+		  {
+		    "value": "Loading...",
+		    "address": "0x2C1E8A0"
+		  },
+		  {
+		    "value": "UnityChina-AssetBundleKey-32Char",
+		    "address": "0x2C1E8A8"
+		  }
+		]
+		""";
+
+	[Test]
+	public async Task KeysAreExtractedFromDumpCs()
+	{
+		IReadOnlyList<UnityCnKeyCandidate> candidates = UnityCnKeyExtractor.ExtractFromText(SampleDump, "dump.cs");
+		await Assert.That(candidates.Count).IsGreaterThanOrEqualTo(1);
+		// Found next to "Key", so it comes first
+		await Assert.That(candidates[0].Text).IsEqualTo(Key24);
+		await Assert.That(candidates.Any(c => c.Text == "1.0.0")).IsFalse();
+		await Assert.That(candidates.Any(c => c.Text == "abcdefghijklmnop")).IsTrue();
+		await Assert.That(candidates[0].Source).IsEqualTo("dump.cs:5");
+	}
+
+	[Test]
+	public async Task KeysAreExtractedFromStringLiteralJson()
+	{
+		IReadOnlyList<UnityCnKeyCandidate> candidates = UnityCnKeyExtractor.ExtractFromText(SampleStringLiteral, "stringliteral.json");
+		await Assert.That(candidates.Count).IsEqualTo(1);
+		await Assert.That(candidates[0].Text).IsEqualTo(Key32);
+	}
+
+	[Test]
+	public async Task EscapesAreDecoded()
+	{
+		List<string> strings = [];
+		UnityCnKeyExtractor.ReadQuotedStrings("x = \"a\\\"b\\u0041\\x42\"; y = \"c\"", strings);
+		await Assert.That(strings.Count).IsEqualTo(2);
+		await Assert.That(strings[0]).IsEqualTo("a\"bAB");
+		await Assert.That(strings[1]).IsEqualTo("c");
+	}
+
+	[Test]
+	public async Task KeyFileFindsTheRightKeysForEachBundle()
+	{
+		string directory = Path.Combine(Path.GetTempPath(), "AssetRipperUnityCnTests_" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(directory);
+		string dumpPath = Path.Combine(directory, "dump.cs");
+		// Noise first, then the two real keys (one in dump.cs style, one as a raw line)
+		StringBuilder dump = new();
+		for (int i = 0; i < 500; i++)
+		{
+			dump.AppendLine($"\tprivate const string Noise{i} = \"{i:D4}-noise-noise-xyz1234\";");
+		}
+		dump.AppendLine(SampleDump);
+		dump.AppendLine($"\tpublic const string Other = \"{Key32}\";");
+		File.WriteAllText(dumpPath, dump.ToString());
+
+		byte[] payload = MakePayload();
+		byte[] bundle24 = MakeEncryptedBundle(Encoding.UTF8.GetBytes(Key24), payload, "2022.3.15f1c1");
+		byte[] bundle32 = MakeEncryptedBundle(Encoding.UTF8.GetBytes(Key32), payload, "2022.3.15f1c1");
+
+		try
+		{
+			int count = UnityCnKey.Configure(null, dumpPath);
+			await Assert.That(count).IsGreaterThan(500);
+
+			foreach (byte[] bytes in (byte[][])[bundle24, bundle32, bundle24])
+			{
+				using SmartStream stream = SmartStream.CreateMemory(bytes);
+				FileStreamBundleFile bundle = new FileStreamBundleScheme().Read(stream, "test.bundle", "test.bundle");
+				await Assert.That(bundle.FailedFiles.Count).IsEqualTo(0);
+				await Assert.That(bundle.ResourceFiles[0].ToByteArray().SequenceEqual(payload)).IsTrue();
+			}
+
+			IReadOnlyList<UnityCnKeyCandidate> found = UnityCnKey.FoundKeys;
+			await Assert.That(found.Count).IsEqualTo(2);
+			await Assert.That(found[0].Text).IsEqualTo(Key24);
+			await Assert.That(found[1].Text).IsEqualTo(Key32);
+			// Found keys are tried first
+			await Assert.That(UnityCnKey.GetCandidates().First().Text).IsEqualTo(Key24);
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
+			Directory.Delete(directory, true);
+		}
+	}
+
+	[Test]
+	public async Task SeveralManualKeysCanBeGiven()
+	{
+		try
+		{
+			UnityCnKey.Set($"{Key24}; {Hex32}\n{Key32}");
+			await Assert.That(UnityCnKey.Candidates.Any(c => c.Text == Key24)).IsTrue();
+			await Assert.That(UnityCnKey.Candidates.Any(c => c.Text == Hex32 && c.Format == "hex")).IsTrue();
+			await Assert.That(UnityCnKey.Candidates.Any(c => c.Text == Key32)).IsTrue();
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
 		}
 	}
 

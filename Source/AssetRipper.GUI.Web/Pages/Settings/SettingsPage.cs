@@ -23,6 +23,7 @@ public sealed partial class SettingsPage : DefaultPage
 			{
 				new P(writer).Close(Localization.SettingsCanOnlyBeChangedBeforeLoadingFiles);
 			}
+			WriteFoundUnityCnKeys(writer);
 		}
 		else
 		{
@@ -73,6 +74,10 @@ public sealed partial class SettingsPage : DefaultPage
 								using (new Div(writer).WithClass("col").End())
 								{
 									WriteTextAreaForUnityCnKey(writer);
+								}
+								using (new Div(writer).WithClass("col").End())
+								{
+									WriteTextAreaForUnityCnKeyFile(writer);
 								}
 							}
 
@@ -233,6 +238,54 @@ public sealed partial class SettingsPage : DefaultPage
 			.WithName(nameof(Configuration.ImportSettings.UnityCnKey))
 			.WithValue(Configuration.ImportSettings.UnityCnKey ?? "")
 			.Close();
+	}
+
+	private static void WriteTextAreaForUnityCnKeyFile(TextWriter writer)
+	{
+		const string id = nameof(Configuration.ImportSettings.UnityCnKeyFile);
+		new Label(writer).WithClass("form-label").WithFor(id).Close(Localization.UnitycnKeyFile);
+		using (new Div(writer).WithClass("input-group").End())
+		{
+			new Input(writer)
+				.WithType("text")
+				.WithClass("form-control")
+				.WithId(id)
+				.WithName(id)
+				.WithValue(Configuration.ImportSettings.UnityCnKeyFile ?? "")
+				.Close();
+			if (Dialogs.Supported)
+			{
+				new Button(writer)
+					.WithType("button")
+					.WithClass("btn btn-success")
+					.WithCustomAttribute("onclick", $"fetch('/Dialogs/OpenFile').then(r => r.json()).then(p => {{ if (p) document.getElementById('{id}').value = p; }})")
+					.Close(Localization.SelectFile);
+			}
+		}
+	}
+
+	private static void WriteFoundUnityCnKeys(TextWriter writer)
+	{
+		IReadOnlyList<IO.Files.BundleFiles.FileStream.UnityCn.UnityCnKeyCandidate> found = IO.Files.BundleFiles.FileStream.UnityCn.UnityCnKey.FoundKeys;
+		if (found.Count == 0)
+		{
+			return;
+		}
+		using (new Div(writer).WithClass("border rounded p-3 m-2").End())
+		{
+			new H3(writer).Close(Localization.UnitycnKeysFound);
+			using (new Ul(writer).End())
+			{
+				foreach (IO.Files.BundleFiles.FileStream.UnityCn.UnityCnKeyCandidate candidate in found)
+				{
+					using (new Li(writer).End())
+					{
+						new Code(writer).Close(candidate.Text);
+						writer.Write($" ({candidate.Format}, AES-{candidate.Key.Length * 8}, {candidate.Source})".ToHtml());
+					}
+				}
+			}
+		}
 	}
 
 	private static void WriteTextAreaForTargetVersion(TextWriter writer)

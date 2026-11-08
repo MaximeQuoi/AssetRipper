@@ -49,6 +49,14 @@ public sealed record class ImportSettings
 	/// </remarks>
 	public string? UnityCnKey { get; set; }
 
+	/// <summary>
+	/// A file to extract UnityCN key candidates from, typically the dump.cs or stringliteral.json produced by Il2CppDumper.
+	/// </summary>
+	/// <remarks>
+	/// Every candidate is tried on the encrypted bundles, and the ones that decrypt them are kept.
+	/// </remarks>
+	public string? UnityCnKeyFile { get; set; }
+
 	public void Log()
 	{
 		Logger.Info(LogCategory.General, $"{nameof(ScriptContentLevel)}: {ScriptContentLevel}");
@@ -56,5 +64,6 @@ public sealed record class ImportSettings
 		Logger.Info(LogCategory.General, $"{nameof(DefaultVersion)}: {DefaultVersion}");
 		Logger.Info(LogCategory.General, $"{nameof(TargetVersion)}: {TargetVersion}");
 		Logger.Info(LogCategory.General, $"{nameof(UnityCnKey)}: {(string.IsNullOrWhiteSpace(UnityCnKey) ? "none" : "set")}");
+		Logger.Info(LogCategory.General, $"{nameof(UnityCnKeyFile)}: {(string.IsNullOrWhiteSpace(UnityCnKeyFile) ? "none" : UnityCnKeyFile)}");
 	}
 }

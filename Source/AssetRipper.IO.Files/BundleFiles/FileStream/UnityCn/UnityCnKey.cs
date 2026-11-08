@@ -3,10 +3,31 @@ using System.Text;
 namespace AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
 
 /// <summary>
-/// Parsing and storage of the user supplied UnityCN (Unity China / Tuanjie) AssetBundle decryption key.
+/// An AES key that may decrypt UnityCN bundles.
+/// </summary>
+/// <param name="Key">The AES key (16, 24 or 32 bytes).</param>
+/// <param name="Text">The key string it was derived from.</param>
+/// <param name="Format">How <paramref name="Text"/> was interpreted: hex, base64 or raw.</param>
+/// <param name="Source">Where the key comes from: settings, environment, or a key file.</param>
+public sealed record class UnityCnKeyCandidate(byte[] Key, string Text, string Format, string Source)
+{
+	public override string ToString() => $"{Text} ({Format}, AES-{Key.Length * 8}, {Source})";
+
+	public bool Equals(UnityCnKeyCandidate? other) => other is not null && Key.AsSpan().SequenceEqual(other.Key);
+
+	public override int GetHashCode()
+	{
+		HashCode hash = new();
+		hash.AddBytes(Key);
+		return hash.ToHashCode();
+	}
+}
+
+/// <summary>
+/// Parsing and storage of the UnityCN (Unity China / Tuanjie) AssetBundle decryption keys.
 /// </summary>
 /// <remarks>
-/// Accepted formats, all of which produce a valid AES key (16, 24 or 32 bytes):
+/// Accepted key formats, all of which produce a valid AES key (16, 24 or 32 bytes):
 /// <list type="bullet">
 /// <item>32 hexadecimal characters: 16 byte AES-128 key (the format used by most tools).</item>
 /// <item>24 characters: either Base64 of a 16 byte key, or the raw 24 character key string (AES-192).</item>
@@ -15,8 +36,11 @@ namespace AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
 /// <item>48 or 64 hexadecimal characters: AES-192 or AES-256 keys.</item>
 /// </list>
 /// An explicit prefix (<c>hex:</c>, <c>base64:</c> / <c>b64:</c>, <c>raw:</c> / <c>ascii:</c>) restricts the interpretation.
-/// When a key string has several possible interpretations, every candidate is tried
-/// and the one that decrypts the bundle signature is kept.
+/// Several keys can be given, separated by <c>;</c> or new lines.<br/>
+/// Keys can also be extracted from a file, typically the <c>dump.cs</c> or <c>stringliteral.json</c> produced by Il2CppDumper
+/// (see <see cref="UnityCnKeyExtractor"/>).<br/>
+/// Every candidate is tried on each encrypted bundle, and the one that decrypts the bundle signature is kept.
+/// Keys that already worked are tried first.
 /// </remarks>
 public static class UnityCnKey
 {
@@ -24,9 +48,17 @@ public static class UnityCnKey
 	/// Environment variable read when no key was configured explicitly.
 	/// </summary>
 	public const string EnvironmentVariable = "ASSETRIPPER_UNITYCN_KEY";
+	/// <summary>
+	/// Environment variable read when no key file was configured explicitly.
+	/// </summary>
+	public const string KeyFileEnvironmentVariable = "ASSETRIPPER_UNITYCN_KEYFILE";
 
+	private static readonly Lock s_lock = new();
 	private static string? s_key;
-	private static IReadOnlyList<byte[]> s_candidates = [];
+	private static string? s_keyFile;
+	private static UnityCnKeyCandidate[] s_candidates = [];
+	private static readonly List<UnityCnKeyCandidate> s_found = [];
+	private static UnityCnKeyCandidate[] s_foundSnapshot = [];
 
 	/// <summary>
 	/// The configured key string, or <see langword="null"/> if none.
@@ -34,43 +66,168 @@ public static class UnityCnKey
 	public static string? Current => s_key;
 
 	/// <summary>
-	/// The candidate AES keys derived from <see cref="Current"/>, falling back to <see cref="EnvironmentVariable"/>.
+	/// The configured key file, or <see langword="null"/> if none.
 	/// </summary>
-	public static IReadOnlyList<byte[]> Candidates
+	public static string? CurrentKeyFile => s_keyFile;
+
+	/// <summary>
+	/// The configured candidates (manual keys first, then the key file), without the environment fallbacks.
+	/// </summary>
+	public static IReadOnlyList<UnityCnKeyCandidate> Candidates
 	{
 		get
 		{
-			if (s_key is null)
+			lock (s_lock)
 			{
-				string? env = Environment.GetEnvironmentVariable(EnvironmentVariable);
-				if (!string.IsNullOrWhiteSpace(env) && TryParse(env, out IReadOnlyList<byte[]> envCandidates, out _))
-				{
-					return envCandidates;
-				}
+				return s_candidates;
 			}
-			return s_candidates;
 		}
 	}
 
 	/// <summary>
-	/// Sets the key used for UnityCN bundles. <see langword="null"/> or whitespace clears it.
+	/// The keys that decrypted at least one bundle, in the order they were found.
 	/// </summary>
-	/// <exception cref="ArgumentException">The key cannot be interpreted as an AES key.</exception>
-	public static void Set(string? key)
+	public static IReadOnlyList<UnityCnKeyCandidate> FoundKeys
 	{
-		if (string.IsNullOrWhiteSpace(key))
+		get
 		{
-			s_key = null;
-			s_candidates = [];
-			return;
+			lock (s_lock)
+			{
+				return s_foundSnapshot;
+			}
+		}
+	}
+
+	/// <summary>
+	/// Sets the manual keys (separated by <c>;</c> or new lines) used for UnityCN bundles. <see langword="null"/> or whitespace clears them.
+	/// </summary>
+	/// <exception cref="ArgumentException">A key cannot be interpreted as an AES key.</exception>
+	public static void Set(string? key) => Configure(key, s_keyFile);
+
+	/// <summary>
+	/// Sets the manual keys and the key file, and resets the found keys.
+	/// </summary>
+	/// <param name="key">Manual keys, separated by <c>;</c> or new lines.</param>
+	/// <param name="keyFile">A file to extract keys from, eg the <c>dump.cs</c> or <c>stringliteral.json</c> of Il2CppDumper.</param>
+	/// <returns>The number of candidates.</returns>
+	/// <exception cref="ArgumentException">A manual key cannot be interpreted as an AES key.</exception>
+	/// <exception cref="IOException">The key file cannot be read.</exception>
+	public static int Configure(string? key, string? keyFile)
+	{
+		List<UnityCnKeyCandidate> candidates = [];
+		string? normalizedKey = string.IsNullOrWhiteSpace(key) ? null : key.Trim();
+		string? normalizedFile = string.IsNullOrWhiteSpace(keyFile) ? null : keyFile.Trim().Trim('"');
+
+		if (normalizedKey is not null)
+		{
+			foreach (string part in SplitKeys(normalizedKey))
+			{
+				if (!TryParse(part, "settings", out IReadOnlyList<UnityCnKeyCandidate> parsed, out string? error))
+				{
+					throw new ArgumentException(error, nameof(key));
+				}
+				candidates.AddRange(parsed);
+			}
 		}
 
-		if (!TryParse(key, out IReadOnlyList<byte[]> candidates, out string? error))
+		if (normalizedFile is not null)
 		{
-			throw new ArgumentException(error, nameof(key));
+			candidates.AddRange(UnityCnKeyExtractor.ExtractFromFile(normalizedFile));
 		}
-		s_key = key.Trim();
-		s_candidates = candidates;
+
+		UnityCnKeyCandidate[] distinct = candidates.Distinct().ToArray();
+		lock (s_lock)
+		{
+			s_key = normalizedKey;
+			s_keyFile = normalizedFile;
+			s_candidates = distinct;
+			s_found.Clear();
+			s_foundSnapshot = [];
+		}
+		return distinct.Length;
+	}
+
+	/// <summary>
+	/// The candidates to try on a bundle: keys already found first, then the configured ones,
+	/// falling back to <see cref="EnvironmentVariable"/> and <see cref="KeyFileEnvironmentVariable"/> if nothing is configured.
+	/// </summary>
+	public static IEnumerable<UnityCnKeyCandidate> GetCandidates()
+	{
+		UnityCnKeyCandidate[] found;
+		UnityCnKeyCandidate[] configured;
+		lock (s_lock)
+		{
+			found = s_foundSnapshot;
+			configured = s_candidates;
+		}
+
+		if (configured.Length == 0 && found.Length == 0)
+		{
+			configured = GetEnvironmentCandidates();
+		}
+
+		foreach (UnityCnKeyCandidate candidate in found)
+		{
+			yield return candidate;
+		}
+		foreach (UnityCnKeyCandidate candidate in configured)
+		{
+			if (!found.Contains(candidate))
+			{
+				yield return candidate;
+			}
+		}
+	}
+
+	/// <summary>
+	/// Records a key that decrypted a bundle, so that it is tried first next time.
+	/// </summary>
+	public static void ReportFound(UnityCnKeyCandidate candidate)
+	{
+		lock (s_lock)
+		{
+			if (!s_found.Contains(candidate))
+			{
+				s_found.Add(candidate);
+				s_foundSnapshot = s_found.ToArray();
+			}
+		}
+	}
+
+	private static UnityCnKeyCandidate[] GetEnvironmentCandidates()
+	{
+		List<UnityCnKeyCandidate> result = [];
+		string? env = Environment.GetEnvironmentVariable(EnvironmentVariable);
+		if (!string.IsNullOrWhiteSpace(env))
+		{
+			foreach (string part in SplitKeys(env))
+			{
+				if (TryParse(part, "environment", out IReadOnlyList<UnityCnKeyCandidate> parsed, out _))
+				{
+					result.AddRange(parsed);
+				}
+			}
+		}
+		string? file = Environment.GetEnvironmentVariable(KeyFileEnvironmentVariable);
+		if (!string.IsNullOrWhiteSpace(file) && File.Exists(file))
+		{
+			result.AddRange(UnityCnKeyExtractor.ExtractFromFile(file));
+		}
+		UnityCnKeyCandidate[] distinct = result.Distinct().ToArray();
+		lock (s_lock)
+		{
+			// Cache, so that the file is not read again for every bundle.
+			if (s_candidates.Length == 0)
+			{
+				s_candidates = distinct;
+			}
+		}
+		return distinct;
+	}
+
+	private static IEnumerable<string> SplitKeys(string keys)
+	{
+		return keys.Split([';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 	}
 
 	/// <summary>
@@ -78,7 +235,17 @@ public static class UnityCnKey
 	/// </summary>
 	public static bool TryParse(string? key, out IReadOnlyList<byte[]> candidates, [NotNullWhen(false)] out string? error)
 	{
-		List<byte[]> result = [];
+		bool result = TryParse(key, "settings", out IReadOnlyList<UnityCnKeyCandidate> parsed, out error);
+		candidates = parsed.Select(c => c.Key).ToArray();
+		return result;
+	}
+
+	/// <summary>
+	/// Converts a key string into the list of AES keys it could represent, most likely first.
+	/// </summary>
+	public static bool TryParse(string? key, string source, out IReadOnlyList<UnityCnKeyCandidate> candidates, [NotNullWhen(false)] out string? error)
+	{
+		List<UnityCnKeyCandidate> result = [];
 		candidates = result;
 		error = null;
 
@@ -108,7 +275,7 @@ public static class UnityCnKey
 		{
 			if (IsHex(compactHex) && compactHex.Length is 32 or 48 or 64)
 			{
-				AddCandidate(result, Convert.FromHexString(compactHex));
+				AddCandidate(result, new(Convert.FromHexString(compactHex), trimmed, "hex", source));
 			}
 		}
 
@@ -116,7 +283,7 @@ public static class UnityCnKey
 		{
 			if (trimmed.Length % 4 == 0 && TryFromBase64(trimmed, out byte[]? decoded) && IsAesKeyLength(decoded.Length))
 			{
-				AddCandidate(result, decoded);
+				AddCandidate(result, new(decoded, trimmed, "base64", source));
 			}
 		}
 
@@ -125,7 +292,7 @@ public static class UnityCnKey
 			byte[] raw = Encoding.UTF8.GetBytes(trimmed);
 			if (IsAesKeyLength(raw.Length))
 			{
-				AddCandidate(result, raw);
+				AddCandidate(result, new(raw, trimmed, "raw", source));
 			}
 		}
 
@@ -138,16 +305,17 @@ public static class UnityCnKey
 		return true;
 	}
 
-	private static void AddCandidate(List<byte[]> list, byte[] candidate)
+	/// <summary>
+	/// Quick length check, before trying to parse a string as a key.
+	/// </summary>
+	internal static bool HasPossibleKeyLength(int length) => length is 16 or 24 or 32 or 48 or 64;
+
+	private static void AddCandidate(List<UnityCnKeyCandidate> list, UnityCnKeyCandidate candidate)
 	{
-		foreach (byte[] existing in list)
+		if (!list.Contains(candidate))
 		{
-			if (existing.AsSpan().SequenceEqual(candidate))
-			{
-				return;
-			}
+			list.Add(candidate);
 		}
-		list.Add(candidate);
 	}
 
 	private static bool IsAesKeyLength(int length) => length is 16 or 24 or 32;
