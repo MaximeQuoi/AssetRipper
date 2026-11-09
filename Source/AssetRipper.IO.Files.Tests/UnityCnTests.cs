@@ -253,6 +253,169 @@ public class UnityCnTests
 		}
 	}
 
+	private static FileStreamBundleFile ReadBundle(byte[] bytes)
+	{
+		SmartStream stream = SmartStream.CreateMemory(bytes);
+		return new FileStreamBundleScheme().Read(stream, "test.bundle", "test.bundle");
+	}
+
+	private static async Task AssertPayload(FileStreamBundleFile bundle, byte[] payload)
+	{
+		await Assert.That(bundle.FailedFiles.Count).IsEqualTo(0);
+		await Assert.That(bundle.ResourceFiles.Count).IsEqualTo(1);
+		await Assert.That(bundle.ResourceFiles[0].ToByteArray().SequenceEqual(payload)).IsTrue();
+	}
+
+	[Test]
+	public async Task HexKeysAreFoundAnywhere()
+	{
+		List<string> found = [];
+		UnityCnKeyExtractor.ReadHexKeys($"// RVA: 0x1A2B3C Offset: 0x{Hex32} VA: 0x1A2B3C", found);
+		await Assert.That(found).Contains(Hex32);
+
+		found.Clear();
+		UnityCnKeyExtractor.ReadHexKeys($"private const string Url = \"https://cdn.example.com/{Hex32}/bundles\";", found);
+		await Assert.That(found).Contains(Hex32);
+
+		found.Clear();
+		UnityCnKeyExtractor.ReadHexKeys($"x = \"abc{Hex32}def0\"", found); // inside a longer hex run
+		await Assert.That(found).Contains(Hex32);
+
+		found.Clear();
+		UnityCnKeyExtractor.ReadHexKeys("[Guid(\"4d79556e-6974-7943-6e4b-657931323334\")]", found);
+		await Assert.That(found).Contains("4d79556e697479436e4b657931323334");
+
+		found.Clear();
+		UnityCnKeyExtractor.ReadHexKeys("// RVA: 0x1A2B3C Offset: 0x1A2B3C", found);
+		await Assert.That(found.Count).IsEqualTo(0);
+	}
+
+	[Test]
+	public async Task HexKeyOnlyInACommentDecryptsTheBundle()
+	{
+		string dump = $$"""
+			// Namespace:
+			public class Boot // TypeDefIndex: 12
+			{
+				// RVA: 0x5F3C10 Offset: 0x5F2C10 VA: 0x5F3C10 Slot: 4 {{Hex32}}
+				public void Start() { }
+			}
+			""";
+		byte[] payload = MakePayload();
+		byte[] bytes = MakeEncryptedBundle(Encoding.ASCII.GetBytes(Key16), payload, "2022.3.15f1c1");
+		string directory = Path.Combine(Path.GetTempPath(), "AssetRipperUnityCnTests_" + Guid.NewGuid().ToString("N"));
+		Directory.CreateDirectory(directory);
+		string dumpPath = Path.Combine(directory, "dump.cs");
+		File.WriteAllText(dumpPath, dump);
+		try
+		{
+			UnityCnKey.Configure(null, dumpPath);
+			await AssertPayload(ReadBundle(bytes), payload);
+			await Assert.That(UnityCnKey.FoundKeys[0].Text).IsEqualTo(Hex32);
+			await Assert.That(UnityCnKey.FoundKeys[0].Source).IsEqualTo("dump.cs:4");
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
+			Directory.Delete(directory, true);
+		}
+	}
+
+	[Test]
+	public async Task KnownKeysAreTriedWithoutConfiguration()
+	{
+		byte[] payload = MakePayload();
+		byte[] key = Convert.FromHexString("6B75726F6B75726F6B75726F6B75726F");
+		UnityCnKey.Configure(null, null);
+		try
+		{
+			await AssertPayload(ReadBundle(MakeEncryptedBundle(key, payload, "2019.4.40f1", flags: 0x40 | 0x200, padding: false)), payload);
+			await Assert.That(UnityCnKey.FoundKeys[0].Source).Contains("Punishing Gray Raven");
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
+		}
+	}
+
+	[Test]
+	public async Task ManjuuSignatureIsAccepted()
+	{
+		byte[] payload = MakePayload();
+		try
+		{
+			UnityCnKey.Set(Key24);
+			byte[] bytes = MakeEncryptedBundle(Encoding.UTF8.GetBytes(Key24), payload, "2022.3.15f1c1", signatureText: UnityCnDecryptor.ManjuuSignature);
+			await AssertPayload(ReadBundle(bytes), payload);
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
+		}
+	}
+
+	[Test]
+	[Arguments("2019.4.40f1")] // 0x200 = encryption according to everyone
+	[Arguments("2021.3.2f1")] // boundary: AnimeStudio says encryption, the padding fix says padding
+	[Arguments("2022.3.0f1c1")] // same
+	public async Task OldEncryptionFlagIsDetected(string version)
+	{
+		byte[] payload = MakePayload();
+		try
+		{
+			UnityCnKey.Set(Key32);
+			byte[] bytes = MakeEncryptedBundle(Encoding.UTF8.GetBytes(Key32), payload, version, flags: 0x40 | 0x200, padding: false);
+			FileStreamBundleFile bundle = ReadBundle(bytes);
+			await Assert.That(bundle.UnityCn).IsNotNull();
+			await AssertPayload(bundle, payload);
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
+		}
+	}
+
+	[Test]
+	[Arguments("2021.3.2f1")]
+	[Arguments("2022.3.10f1")]
+	[Arguments("2020.1.0f1")]
+	public async Task PaddingFlagIsNotMistakenForEncryption(string version)
+	{
+		byte[] payload = MakePayload();
+		try
+		{
+			UnityCnKey.Set(Key32); // a key is configured, but the bundle is not encrypted
+			byte[] bytes = MakeEncryptedBundle(Encoding.UTF8.GetBytes(Key32), payload, version, flags: 0x40 | 0x200, encrypt: false, padding: true);
+			FileStreamBundleFile bundle = ReadBundle(bytes);
+			await Assert.That(bundle.UnityCn).IsNull();
+			await AssertPayload(bundle, payload);
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
+		}
+	}
+
+	[Test]
+	public async Task Flag0x1000IsHandled()
+	{
+		byte[] payload = MakePayload();
+		try
+		{
+			UnityCnKey.Set(Key24);
+			byte[] encrypted = MakeEncryptedBundle(Encoding.UTF8.GetBytes(Key24), payload, "2022.3.15f1c1", flags: 0x40 | 0x200 | 0x1000);
+			await AssertPayload(ReadBundle(encrypted), payload);
+			byte[] plain = MakeEncryptedBundle(Encoding.UTF8.GetBytes(Key24), payload, "2022.3.15f1c1", flags: 0x40 | 0x200 | 0x1000, encrypt: false);
+			FileStreamBundleFile bundle = ReadBundle(plain);
+			await Assert.That(bundle.UnityCn).IsNull();
+			await AssertPayload(bundle, payload);
+		}
+		finally
+		{
+			UnityCnKey.Configure(null, null);
+		}
+	}
+
 	private static byte[] MakePayload()
 	{
 		StringBuilder sb = new();
@@ -266,7 +429,8 @@ public class UnityCnTests
 	/// <summary>
 	/// Builds a minimal UnityFS bundle (version 7, new 0x400 encryption flag) with one encrypted LZ4 block containing one file.
 	/// </summary>
-	private static byte[] MakeEncryptedBundle(byte[] key, byte[] payload, string unityVersion)
+	private static byte[] MakeEncryptedBundle(byte[] key, byte[] payload, string unityVersion,
+		int flags = 0x40 | 0x200 | 0x400, string signatureText = UnityCnDecryptor.Signature, bool encrypt = true, bool padding = true)
 	{
 		// Encryption tables: index must be a permutation of 0-15 so that a test encryptor exists.
 		byte[] index = new byte[16];
@@ -293,7 +457,7 @@ public class UnityCnTests
 		byte[] signatureKey = RandomNumberGenerator.GetBytes(16);
 		byte[] encryptedInfoKey = aes.EncryptEcb(infoKey, PaddingMode.None);
 		byte[] encryptedSignatureKey = aes.EncryptEcb(signatureKey, PaddingMode.None);
-		byte[] signature = Encoding.ASCII.GetBytes(UnityCnDecryptor.Signature);
+		byte[] signature = Encoding.ASCII.GetBytes(signatureText);
 
 		MemoryStream cnData = new();
 		cnData.Write(new byte[4]);
@@ -308,7 +472,10 @@ public class UnityCnTests
 		byte[] compressed = new byte[LZ4Codec.MaximumOutputSize(payload.Length)];
 		int compressedLength = LZ4Codec.Encode(payload, compressed, LZ4Level.L00_FAST);
 		compressed = compressed[..compressedLength];
-		EncryptBlock(compressed, 0, index, sub);
+		if (encrypt)
+		{
+			EncryptBlock(compressed, 0, index, sub);
+		}
 
 		// Blocks info + directory (uncompressed, combined)
 		MemoryStream meta = new();
@@ -316,14 +483,13 @@ public class UnityCnTests
 		WriteInt32(meta, 1);
 		WriteInt32(meta, payload.Length);
 		WriteInt32(meta, compressed.Length);
-		WriteInt16(meta, (short)(0x100 | 2)); // encrypted + LZ4
+		WriteInt16(meta, (short)((encrypt ? 0x100 : 0) | 2)); // encrypted + LZ4
 		WriteInt32(meta, 1);
 		WriteInt64(meta, 0);
 		WriteInt64(meta, payload.Length);
 		WriteInt32(meta, 4);
 		meta.Write(Encoding.ASCII.GetBytes("CAB-test\0"));
 
-		const int flags = 0x40 | 0x200 | 0x400; // combined, padding, UnityCN
 		MemoryStream bundle = new();
 		bundle.Write(Encoding.ASCII.GetBytes("UnityFS\0"));
 		WriteInt32(bundle, 7);
@@ -334,10 +500,16 @@ public class UnityCnTests
 		WriteInt32(bundle, (int)meta.Length);
 		WriteInt32(bundle, (int)meta.Length);
 		WriteInt32(bundle, flags);
-		cnData.WriteTo(bundle);
+		if (encrypt)
+		{
+			cnData.WriteTo(bundle);
+		}
 		Align16(bundle);
 		meta.WriteTo(bundle);
-		Align16(bundle);
+		if (padding)
+		{
+			Align16(bundle);
+		}
 		bundle.Write(compressed);
 
 		long size = bundle.Length;

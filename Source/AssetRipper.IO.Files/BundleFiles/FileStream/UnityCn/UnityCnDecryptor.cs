@@ -22,6 +22,10 @@ public sealed class UnityCnDecryptor
 {
 	public const string Signature = "#$unity3dchina!@";
 	/// <summary>
+	/// Alternative signature used by some games (Manjuu).
+	/// </summary>
+	public const string ManjuuSignature = "#$manjuuunity*!@";
+	/// <summary>
 	/// Size of the encryption data following the header.
 	/// </summary>
 	public const int HeaderDataSize = 4 + 16 + 16 + 1 + 16 + 16 + 1;
@@ -94,7 +98,7 @@ public sealed class UnityCnDecryptor
 			aes.Key = candidate.Key;
 
 			XorWithEncryptedKey(aes, signatureKey, signatureBytes, decrypted);
-			if (!decrypted.SequenceEqual(SignatureBytes))
+			if (!decrypted.SequenceEqual(SignatureBytes) && !decrypted.SequenceEqual(ManjuuSignatureBytes))
 			{
 				continue;
 			}
@@ -114,6 +118,7 @@ public sealed class UnityCnDecryptor
 	}
 
 	private static ReadOnlySpan<byte> SignatureBytes => "#$unity3dchina!@"u8;
+	private static ReadOnlySpan<byte> ManjuuSignatureBytes => "#$manjuuunity*!@"u8;
 
 	private static void XorWithEncryptedKey(Aes aes, ReadOnlySpan<byte> key, ReadOnlySpan<byte> data, Span<byte> destination)
 	{
@@ -194,21 +199,52 @@ public sealed class UnityCnDecryptor
 	}
 
 	/// <summary>
+	/// How the header flags indicate UnityCN encryption.
+	/// </summary>
+	public static UnityCnFlagMode GetFlagMode(FileStreamBundleHeader header)
+	{
+		if ((header.Flags & BundleFlags.EncryptionNew) != 0)
+		{
+			return UnityCnFlagMode.Encrypted;
+		}
+		if ((header.Flags & BundleFlags.EncryptionNew2) != 0)
+		{
+			// Used by some UnityCN games, but not documented: both readings are tried.
+			return UnityCnFlagMode.Ambiguous;
+		}
+		if ((header.Flags & BundleFlags.EncryptionOld) != 0)
+		{
+			// 0x200 is either the old encryption flag or BlockInfoNeedPaddingAtStart.
+			// The boundary between both meanings is not known precisely for every Unity China release,
+			// so up to 2022 both readings are tried.
+			string version = header.UnityWebMinimumRevision.String;
+			if (!TryParseVersion(version, out int major, out _, out _) || major <= 2022)
+			{
+				return UnityCnFlagMode.Ambiguous;
+			}
+		}
+		return UnityCnFlagMode.None;
+	}
+
+	/// <summary>
 	/// Whether the bundle is UnityCN encrypted, and whether 0x200 means encryption (old scheme) rather than padding.
 	/// </summary>
+	/// <remarks>
+	/// For an <see cref="UnityCnFlagMode.Ambiguous"/> bundle, this uses the Unity version alone.
+	/// </remarks>
 	public static bool IsEncrypted(FileStreamBundleHeader header, out bool usesOldFlag)
 	{
 		usesOldFlag = false;
-		if ((header.Flags & BundleFlags.EncryptionNew) != 0)
+		switch (GetFlagMode(header))
 		{
-			return true;
+			case UnityCnFlagMode.Encrypted:
+				return true;
+			case UnityCnFlagMode.Ambiguous when IsBeforePaddingFlag(header.UnityWebMinimumRevision.String):
+				usesOldFlag = true;
+				return true;
+			default:
+				return false;
 		}
-		if ((header.Flags & BundleFlags.EncryptionOld) != 0 && IsBeforePaddingFlag(header.UnityWebMinimumRevision.String))
-		{
-			usesOldFlag = true;
-			return true;
-		}
-		return false;
 	}
 
 	/// <summary>
@@ -278,3 +314,19 @@ public sealed class UnityCnDecryptor
 }
 
 public sealed class UnityCnKeyException(string message) : Exception(message);
+
+public enum UnityCnFlagMode
+{
+	/// <summary>
+	/// Not encrypted.
+	/// </summary>
+	None,
+	/// <summary>
+	/// Encrypted (0x400 flag).
+	/// </summary>
+	Encrypted,
+	/// <summary>
+	/// 0x1000, or 0x200 up to Unity 2022: possibly encrypted. 0x200 is either the old encryption flag or padding.
+	/// </summary>
+	Ambiguous,
+}

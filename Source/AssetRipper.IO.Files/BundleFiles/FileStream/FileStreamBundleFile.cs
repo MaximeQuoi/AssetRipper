@@ -36,13 +36,101 @@ public sealed class FileStreamBundleFile : FileContainer
 	{
 		long basePosition = stream.Position;
 		Header.Read(stream);
-		if (UnityCnDecryptor.IsEncrypted(Header, out m_usesOldEncryptionFlag))
+		long headerSize = UnityCnDecryptor.GetFlagMode(Header) switch
+		{
+			UnityCnFlagMode.Encrypted => ReadMetadataWithUnityCn(stream, basePosition, encrypted: true),
+			UnityCnFlagMode.Ambiguous => ReadMetadataPossiblyEncrypted(stream, basePosition),
+			_ => ReadMetadataWithUnityCn(stream, basePosition, encrypted: false),
+		};
+		ReadFileStreamData(stream, basePosition, headerSize);//ReadBlocks and ReadFiles
+	}
+
+	/// <summary>
+	/// Reads the optional UnityCN data after the header, then the blocks info and directory.
+	/// </summary>
+	/// <returns>The header size, including the UnityCN data.</returns>
+	private long ReadMetadataWithUnityCn(Stream stream, long basePosition, bool encrypted)
+	{
+		UnityCn = null;
+		m_usesOldEncryptionFlag = false;
+		if (encrypted)
 		{
 			UnityCn = UnityCnDecryptor.Read(stream, NameFixed);
+			// 0x200 is the encryption flag, not padding, when it is the only encryption flag or the Unity version predates padding.
+			bool onlyOldFlag = (Header.Flags & (BundleFlags.EncryptionNew | BundleFlags.EncryptionNew2)) == 0;
+			m_usesOldEncryptionFlag = (Header.Flags & BundleFlags.EncryptionOld) != 0
+				&& (onlyOldFlag || UnityCnDecryptor.IsBeforePaddingFlag(Header.UnityWebMinimumRevision.String));
 		}
 		long headerSize = stream.Position - basePosition;
 		ReadFileStreamMetadata(stream, basePosition);//ReadBlocksInfoAndDirectory
-		ReadFileStreamData(stream, basePosition, headerSize);//ReadBlocks and ReadFiles
+		return headerSize;
+	}
+
+	/// <summary>
+	/// The header flags may or may not mean UnityCN encryption: try both readings and keep the one with consistent metadata.
+	/// </summary>
+	private long ReadMetadataPossiblyEncrypted(Stream stream, long basePosition)
+	{
+		long afterHeader = stream.Position;
+		bool encryptedFirst = UnityCnDecryptor.IsBeforePaddingFlag(Header.UnityWebMinimumRevision.String);
+		Exception? unityCnError = null;
+		Exception? plainError = null;
+		foreach (bool encrypted in (bool[])[encryptedFirst, !encryptedFirst])
+		{
+			stream.Position = afterHeader;
+			try
+			{
+				long headerSize = ReadMetadataWithUnityCn(stream, basePosition, encrypted);
+				ValidateMetadata(encrypted);
+				return headerSize;
+			}
+			catch (Exception ex)
+			{
+				if (encrypted)
+				{
+					unityCnError = ex;
+				}
+				else
+				{
+					plainError = ex;
+				}
+			}
+		}
+		UnityCn = null;
+		m_usesOldEncryptionFlag = false;
+		// A key error is more useful than garbage metadata, unless no key was involved at all.
+		throw unityCnError is UnityCnKeyException ? unityCnError : plainError ?? unityCnError!;
+	}
+
+	/// <summary>
+	/// Basic consistency checks, used to tell an encrypted bundle from a plain one.
+	/// </summary>
+	private void ValidateMetadata(bool encrypted)
+	{
+		long totalSize = 0;
+		foreach (StorageBlock block in BlocksInfo.StorageBlocks)
+		{
+			if (!encrypted && (block.Flags & UnityCnDecryptor.EncryptedBlockFlag) != 0)
+			{
+				throw new InvalidFormatException("Block flagged as UnityCN encrypted.");
+			}
+			if (block.UncompressedSize == 0 && block.CompressedSize != 0)
+			{
+				throw new InvalidFormatException("Invalid storage block.");
+			}
+			totalSize += block.UncompressedSize;
+		}
+		foreach (FileStreamNode node in DirectoryInfo.Nodes)
+		{
+			if (node.Offset < 0 || node.Size < 0 || node.Offset + node.Size > totalSize)
+			{
+				throw new InvalidFormatException("Directory entry outside of the bundle data.");
+			}
+		}
+		if (DirectoryInfo.Nodes.Length == 0 && BlocksInfo.StorageBlocks.Length == 0 && Header.Size > 0)
+		{
+			throw new InvalidFormatException("Empty bundle metadata.");
+		}
 	}
 
 	public override void Write(Stream stream)

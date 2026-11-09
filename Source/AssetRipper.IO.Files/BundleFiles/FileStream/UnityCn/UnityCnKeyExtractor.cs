@@ -8,7 +8,8 @@ namespace AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
 /// <item><c>dump.cs</c>: constant fields, eg <c>private const string Key = "...";</c></item>
 /// <item><c>stringliteral.json</c>: every string literal of the code, eg the argument of <c>AssetBundle.SetAssetBundleDecryptKey</c>.</item>
 /// </list>
-/// Any other text file works too: every quoted string, and every line that is itself a possible key, is considered.
+/// Any other text file works too: every quoted string, every line that is itself a possible key,
+/// and every 32 digit hexadecimal key anywhere in the text, are considered.
 /// </summary>
 /// <remarks>
 /// Only strings with a possible key length are kept. Strings found next to key related words
@@ -37,18 +38,22 @@ public static class UnityCnKeyExtractor
 	{
 		// Buckets, most likely first.
 		List<UnityCnKeyCandidate> nearKeyWord = [];
+		List<UnityCnKeyCandidate> hex128 = [];
 		List<UnityCnKeyCandidate> keyShaped = [];
 		List<UnityCnKeyCandidate> other = [];
 		HashSet<UnityCnKeyCandidate> seen = [];
 
 		List<string> strings = [];
+		List<string> hexRuns = [];
 		string? line;
 		int lineNumber = 0;
 		while ((line = reader.ReadLine()) is not null)
 		{
 			lineNumber++;
 			strings.Clear();
+			hexRuns.Clear();
 			ReadQuotedStrings(line, strings);
+			ReadHexKeys(line, hexRuns);
 			if (strings.Count == 0)
 			{
 				// Plain text file with one key per line
@@ -57,23 +62,33 @@ public static class UnityCnKeyExtractor
 				{
 					strings.Add(trimmed);
 				}
-				else
-				{
-					continue;
-				}
+			}
+			if (strings.Count == 0 && hexRuns.Count == 0)
+			{
+				continue;
 			}
 
 			bool hasKeyWord = ContainsKeyWord(line);
+			string lineSource = $"{source}:{lineNumber}";
+
 			foreach (string value in strings)
 			{
-				if (!IsPlausible(value))
+				if (IsPlausible(value) && UnityCnKey.TryParse(value, lineSource, out IReadOnlyList<UnityCnKeyCandidate> parsed, out _))
 				{
-					continue;
+					AddAll(parsed, value.Contains(' '));
 				}
-				if (!UnityCnKey.TryParse(value, $"{source}:{lineNumber}", out IReadOnlyList<UnityCnKeyCandidate> parsed, out _))
+			}
+			foreach (string hex in hexRuns)
+			{
+				// Hex keys found anywhere: in comments, inside longer strings, as 0x... values, in GUIDs.
+				if (UnityCnKey.TryParse("hex:" + hex, lineSource, out IReadOnlyList<UnityCnKeyCandidate> parsed, out _))
 				{
-					continue;
+					AddAll(parsed, false);
 				}
+			}
+
+			void AddAll(IReadOnlyList<UnityCnKeyCandidate> parsed, bool hasSpace)
+			{
 				foreach (UnityCnKeyCandidate candidate in parsed)
 				{
 					if (!seen.Add(candidate))
@@ -84,7 +99,11 @@ public static class UnityCnKeyExtractor
 					{
 						nearKeyWord.Add(candidate);
 					}
-					else if (candidate.Format is "hex" or "base64" || !value.Contains(' '))
+					else if (candidate.Format == "hex" && candidate.Key.Length == 16)
+					{
+						hex128.Add(candidate);
+					}
+					else if (candidate.Format is "hex" or "base64" || !hasSpace)
 					{
 						keyShaped.Add(candidate);
 					}
@@ -96,7 +115,104 @@ public static class UnityCnKeyExtractor
 			}
 		}
 
-		return [.. nearKeyWord, .. keyShaped, .. other];
+		return [.. nearKeyWord, .. hex128, .. keyShaped, .. other];
+	}
+
+	/// <summary>
+	/// Maximum length of a hexadecimal run split into 32 digit chunks.
+	/// </summary>
+	private const int MaxHexRunLength = 256;
+
+	/// <summary>
+	/// Finds every hexadecimal key of a line, wherever it is: each run of 32, 48 or 64 hex digits,
+	/// every 32 digit window of runs up to 47 digits, the aligned 32 digit chunks of longer runs,
+	/// and GUIDs (8-4-4-4-12) without their dashes.
+	/// </summary>
+	public static void ReadHexKeys(string line, List<string> result)
+	{
+		int i = 0;
+		while (i < line.Length)
+		{
+			if (!char.IsAsciiHexDigit(line[i]))
+			{
+				i++;
+				continue;
+			}
+			int start = i;
+			while (i < line.Length && char.IsAsciiHexDigit(line[i]))
+			{
+				i++;
+			}
+			int length = i - start;
+			if (length < 32)
+			{
+				continue;
+			}
+			string run = line.Substring(start, length);
+			if (length is 32 or 48 or 64)
+			{
+				result.Add(run);
+			}
+			if (length > 32 && length < 48)
+			{
+				// A key glued to a few other hex digits: every window
+				for (int offset = 0; offset + 32 <= length; offset++)
+				{
+					result.Add(run.Substring(offset, 32));
+				}
+			}
+			else if (length > 32 && length <= MaxHexRunLength)
+			{
+				// Long runs (hashes, concatenated keys): aligned 32 digit chunks, from both ends
+				for (int offset = 0; offset + 32 <= length; offset += 32)
+				{
+					result.Add(run.Substring(offset, 32));
+				}
+				if (length % 32 != 0)
+				{
+					for (int offset = length - 32; offset >= 0; offset -= 32)
+					{
+						result.Add(run.Substring(offset, 32));
+					}
+				}
+			}
+		}
+
+		// GUIDs
+		for (int index = line.IndexOf('-'); index >= 8 && index + 28 <= line.Length; index = line.IndexOf('-', index + 1))
+		{
+			int start = index - 8;
+			if (IsGuidAt(line, start))
+			{
+				result.Add(line.Substring(start, 36).Replace("-", ""));
+			}
+		}
+
+		static bool IsGuidAt(string text, int start)
+		{
+			if (start < 0 || start + 36 > text.Length)
+			{
+				return false;
+			}
+			if (start > 0 && char.IsAsciiHexDigit(text[start - 1]))
+			{
+				return false;
+			}
+			if (start + 36 < text.Length && char.IsAsciiHexDigit(text[start + 36]))
+			{
+				return false;
+			}
+			for (int k = 0; k < 36; k++)
+			{
+				char c = text[start + k];
+				bool dash = k is 8 or 13 or 18 or 23;
+				if (dash ? c != '-' : !char.IsAsciiHexDigit(c))
+				{
+					return false;
+				}
+			}
+			return true;
+		}
 	}
 
 	private static bool ContainsKeyWord(string line)

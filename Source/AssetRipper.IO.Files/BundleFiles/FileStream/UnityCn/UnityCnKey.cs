@@ -40,7 +40,7 @@ public sealed record class UnityCnKeyCandidate(byte[] Key, string Text, string F
 /// Keys can also be extracted from a file, typically the <c>dump.cs</c> or <c>stringliteral.json</c> produced by Il2CppDumper
 /// (see <see cref="UnityCnKeyExtractor"/>).<br/>
 /// Every candidate is tried on each encrypted bundle, and the one that decrypts the bundle signature is kept.
-/// Keys that already worked are tried first.
+/// Keys that already worked are tried first, and publicly known keys (<see cref="UnityCnKnownKeys"/>) are tried too.
 /// </remarks>
 public static class UnityCnKey
 {
@@ -56,7 +56,9 @@ public static class UnityCnKey
 	private static readonly Lock s_lock = new();
 	private static string? s_key;
 	private static string? s_keyFile;
-	private static UnityCnKeyCandidate[] s_candidates = [];
+	private static UnityCnKeyCandidate[] s_manual = [];
+	private static UnityCnKeyCandidate[] s_file = [];
+	private static bool s_environmentLoaded;
 	private static readonly List<UnityCnKeyCandidate> s_found = [];
 	private static UnityCnKeyCandidate[] s_foundSnapshot = [];
 
@@ -71,7 +73,12 @@ public static class UnityCnKey
 	public static string? CurrentKeyFile => s_keyFile;
 
 	/// <summary>
-	/// The configured candidates (manual keys first, then the key file), without the environment fallbacks.
+	/// Whether the publicly known keys (<see cref="UnityCnKnownKeys"/>) are tried. True by default.
+	/// </summary>
+	public static bool UseKnownKeys { get; set; } = true;
+
+	/// <summary>
+	/// The configured candidates (manual keys first, then the key file), without the environment fallbacks and known keys.
 	/// </summary>
 	public static IReadOnlyList<UnityCnKeyCandidate> Candidates
 	{
@@ -79,7 +86,7 @@ public static class UnityCnKey
 		{
 			lock (s_lock)
 			{
-				return s_candidates;
+				return [.. s_manual, .. s_file];
 			}
 		}
 	}
@@ -114,7 +121,7 @@ public static class UnityCnKey
 	/// <exception cref="IOException">The key file cannot be read.</exception>
 	public static int Configure(string? key, string? keyFile)
 	{
-		List<UnityCnKeyCandidate> candidates = [];
+		List<UnityCnKeyCandidate> manual = [];
 		string? normalizedKey = string.IsNullOrWhiteSpace(key) ? null : key.Trim();
 		string? normalizedFile = string.IsNullOrWhiteSpace(keyFile) ? null : keyFile.Trim().Trim('"');
 
@@ -126,55 +133,53 @@ public static class UnityCnKey
 				{
 					throw new ArgumentException(error, nameof(key));
 				}
-				candidates.AddRange(parsed);
+				manual.AddRange(parsed);
 			}
 		}
 
-		if (normalizedFile is not null)
-		{
-			candidates.AddRange(UnityCnKeyExtractor.ExtractFromFile(normalizedFile));
-		}
+		IReadOnlyList<UnityCnKeyCandidate> file = normalizedFile is null ? [] : UnityCnKeyExtractor.ExtractFromFile(normalizedFile);
 
-		UnityCnKeyCandidate[] distinct = candidates.Distinct().ToArray();
 		lock (s_lock)
 		{
 			s_key = normalizedKey;
 			s_keyFile = normalizedFile;
-			s_candidates = distinct;
+			s_manual = manual.Distinct().ToArray();
+			s_file = file.Distinct().Except(s_manual).ToArray();
+			s_environmentLoaded = false;
 			s_found.Clear();
 			s_foundSnapshot = [];
+			return s_manual.Length + s_file.Length;
 		}
-		return distinct.Length;
 	}
 
 	/// <summary>
-	/// The candidates to try on a bundle: keys already found first, then the configured ones,
-	/// falling back to <see cref="EnvironmentVariable"/> and <see cref="KeyFileEnvironmentVariable"/> if nothing is configured.
+	/// The candidates to try on a bundle, in order: keys already found, manual keys, publicly known keys, then the key file.
+	/// If nothing is configured, <see cref="EnvironmentVariable"/> and <see cref="KeyFileEnvironmentVariable"/> are used.
 	/// </summary>
 	public static IEnumerable<UnityCnKeyCandidate> GetCandidates()
 	{
+		LoadEnvironmentIfNeeded();
+
 		UnityCnKeyCandidate[] found;
-		UnityCnKeyCandidate[] configured;
+		UnityCnKeyCandidate[] manual;
+		UnityCnKeyCandidate[] file;
 		lock (s_lock)
 		{
 			found = s_foundSnapshot;
-			configured = s_candidates;
+			manual = s_manual;
+			file = s_file;
 		}
+		IReadOnlyList<UnityCnKeyCandidate> known = UseKnownKeys ? UnityCnKnownKeys.Candidates : [];
 
-		if (configured.Length == 0 && found.Length == 0)
+		HashSet<UnityCnKeyCandidate> seen = [];
+		foreach (IReadOnlyList<UnityCnKeyCandidate> list in (IReadOnlyList<UnityCnKeyCandidate>[])[found, manual, known, file])
 		{
-			configured = GetEnvironmentCandidates();
-		}
-
-		foreach (UnityCnKeyCandidate candidate in found)
-		{
-			yield return candidate;
-		}
-		foreach (UnityCnKeyCandidate candidate in configured)
-		{
-			if (!found.Contains(candidate))
+			foreach (UnityCnKeyCandidate candidate in list)
 			{
-				yield return candidate;
+				if (seen.Add(candidate))
+				{
+					yield return candidate;
+				}
 			}
 		}
 	}
@@ -194,9 +199,18 @@ public static class UnityCnKey
 		}
 	}
 
-	private static UnityCnKeyCandidate[] GetEnvironmentCandidates()
+	private static void LoadEnvironmentIfNeeded()
 	{
-		List<UnityCnKeyCandidate> result = [];
+		lock (s_lock)
+		{
+			if (s_environmentLoaded || s_key is not null || s_keyFile is not null)
+			{
+				return;
+			}
+			s_environmentLoaded = true;
+		}
+
+		List<UnityCnKeyCandidate> manual = [];
 		string? env = Environment.GetEnvironmentVariable(EnvironmentVariable);
 		if (!string.IsNullOrWhiteSpace(env))
 		{
@@ -204,25 +218,25 @@ public static class UnityCnKey
 			{
 				if (TryParse(part, "environment", out IReadOnlyList<UnityCnKeyCandidate> parsed, out _))
 				{
-					result.AddRange(parsed);
+					manual.AddRange(parsed);
 				}
 			}
 		}
-		string? file = Environment.GetEnvironmentVariable(KeyFileEnvironmentVariable);
-		if (!string.IsNullOrWhiteSpace(file) && File.Exists(file))
+		IReadOnlyList<UnityCnKeyCandidate> file = [];
+		string? path = Environment.GetEnvironmentVariable(KeyFileEnvironmentVariable);
+		if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
 		{
-			result.AddRange(UnityCnKeyExtractor.ExtractFromFile(file));
+			file = UnityCnKeyExtractor.ExtractFromFile(path);
 		}
-		UnityCnKeyCandidate[] distinct = result.Distinct().ToArray();
+
 		lock (s_lock)
 		{
-			// Cache, so that the file is not read again for every bundle.
-			if (s_candidates.Length == 0)
+			if (s_key is null && s_keyFile is null)
 			{
-				s_candidates = distinct;
+				s_manual = manual.Distinct().ToArray();
+				s_file = file.Distinct().Except(s_manual).ToArray();
 			}
 		}
-		return distinct;
 	}
 
 	private static IEnumerable<string> SplitKeys(string keys)

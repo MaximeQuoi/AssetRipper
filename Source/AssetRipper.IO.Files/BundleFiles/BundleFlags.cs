@@ -34,6 +34,10 @@ public enum BundleFlags
 	/// Chinese encryption flag (presumeably) after 2020.3.34f1, 2021.3.2f1, 2022.1.1f1.
 	/// </summary>
 	EncryptionNew = 0x400,
+	/// <summary>
+	/// Second Chinese encryption flag, used by some UnityCN games.
+	/// </summary>
+	EncryptionNew2 = 0x1000,
 }
 
 public static class BundleFlagsExtensions

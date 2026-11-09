@@ -60,9 +60,17 @@ Several keys can be given, separated by `;` or new lines.
 Instead of a key, select the `dump.cs` or `stringliteral.json` produced by [Il2CppDumper](https://github.com/Perfare/Il2CppDumper)
 in **Settings → UnityCN key file** (or set `ASSETRIPPER_UNITYCN_KEYFILE`).
 Every string with a possible key length is extracted (strings next to words such as `key`, `secret`, `crypt` or `aes` first),
-then tried on each encrypted bundle: the decrypted signature `#$unity3dchina!@` identifies the right key without false positives.
+as well as **every 32 digit hexadecimal key found anywhere in the file**: in comments, `0x...` values, longer strings or GUIDs.
+They are tried on each encrypted bundle: the decrypted signature (`#$unity3dchina!@`, or `#$manjuuunity*!@`) identifies the right key without false positives.
 A game using several keys is handled, since each bundle keeps the key that decrypts it, and keys already found are tried first.
 The keys found are written to the log and listed on the settings page after loading.
+
+### Known keys and flags
+
+Publicly known keys (the list of [AnimeStudio](https://github.com/Escartem/AnimeStudio): Punishing Gray Raven, Neural Cloud, Archeland...)
+are always tried, so these games need no configuration at all.
+The `0x1000` flag is supported, and for Unity versions up to 2022 where `0x200` may mean either encryption or padding,
+both readings are tried and the consistent one is kept.
 
 `stringliteral.json` contains every string literal of the code, so it is the best choice when the key is passed directly to
 `AssetBundle.SetAssetBundleDecryptKey("...")`; `dump.cs` only contains the values of `const` fields.
