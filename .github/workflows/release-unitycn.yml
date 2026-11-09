@@ -80,9 +80,10 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: publish
+    needs: [test, publish]
     # Publish what was built even if a runner was unavailable; a rerun of the failed job uploads the rest.
-    if: ${{ !cancelled() }}
+    # Never publish when the tests did not pass (or did not run).
+    if: ${{ !cancelled() && needs.test.result == 'success' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
