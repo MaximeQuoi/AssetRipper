@@ -40,8 +40,8 @@ jobs:
           - { name: win_arm64, os: windows-latest, runtime: win-arm64, executable: AssetRipper.GUI.Free.exe }
           - { name: linux_x64, os: ubuntu-22.04, runtime: linux-x64, executable: AssetRipper.GUI.Free }
           - { name: linux_arm64, os: ubuntu-22.04-arm, runtime: linux-arm64, executable: AssetRipper.GUI.Free }
-          - { name: mac_x64, os: macos-14, runtime: osx-x64, executable: AssetRipper.GUI.Free }
-          - { name: mac_arm64, os: macos-14, runtime: osx-arm64, executable: AssetRipper.GUI.Free }
+          - { name: mac_x64, os: macos-latest, runtime: osx-x64, executable: AssetRipper.GUI.Free }
+          - { name: mac_arm64, os: macos-latest, runtime: osx-arm64, executable: AssetRipper.GUI.Free }
 
     steps:
       - uses: actions/checkout@v7
@@ -61,12 +61,14 @@ jobs:
         run: |
           date -u > compile_time.txt
           echo "${TAG}" > version.txt
-          FILES="${{ matrix.config.executable }} compile_time.txt version.txt $(ls *.dll *.so *.dylib 2>/dev/null | tr '\n' ' ')"
+          shopt -s nullglob
+          FILES=("${{ matrix.config.executable }}" compile_time.txt version.txt *.dll *.so *.dylib)
+          echo "Files: ${FILES[*]}"
           mkdir -p "$GITHUB_WORKSPACE/dist"
           if [[ "${{ matrix.config.runtime }}" == win-* ]]; then
-            7z a "$GITHUB_WORKSPACE/dist/AssetRipper_UnityCN_${{ matrix.config.name }}.zip" $FILES
+            7z a "$GITHUB_WORKSPACE/dist/AssetRipper_UnityCN_${{ matrix.config.name }}.zip" "${FILES[@]}"
           else
-            tar cvJf "$GITHUB_WORKSPACE/dist/AssetRipper_UnityCN_${{ matrix.config.name }}.tar.xz" $FILES
+            tar cvJf "$GITHUB_WORKSPACE/dist/AssetRipper_UnityCN_${{ matrix.config.name }}.tar.xz" "${FILES[@]}"
           fi
           ls -la "$GITHUB_WORKSPACE/dist"
 
