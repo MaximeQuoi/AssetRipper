@@ -86,6 +86,11 @@ public static class WebApplicationLauncher
 		Logger.LogSystemInformation("AssetRipper");
 		Logger.Add(new ConsoleLogger());
 
+		if (FileDescriptorLimit.Raise() is { } fileLimit)
+		{
+			Logger.Info(LogCategory.System, fileLimit);
+		}
+
 		Localization.LoadLanguage(GameFileLoader.Settings.LanguageCode);
 
 		WebApplicationBuilder builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions()
