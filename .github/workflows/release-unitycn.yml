@@ -32,6 +32,7 @@ jobs:
   publish:
     needs: test
     runs-on: ${{ matrix.config.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -96,8 +97,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "AssetRipper $TAG" \
-            --notes-file .github/release-notes-unitycn.md \
-            --verify-tag
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # Release already published (eg partial upload): add or replace the assets
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "AssetRipper $TAG" \
+              --notes-file .github/release-notes-unitycn.md \
+              --verify-tag
+          fi
