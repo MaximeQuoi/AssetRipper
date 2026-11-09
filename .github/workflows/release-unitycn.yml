@@ -1,0 +1,101 @@
+name: Release (UnityCN fork)
+
+on:
+  push:
+    tags: ['*-unitycn*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (must already exist)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      - name: Test IO (UnityCN)
+        run: dotnet run -c Release
+        working-directory: ./Source/AssetRipper.IO.Files.Tests/
+
+  publish:
+    needs: test
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - { name: win_x64, os: windows-latest, runtime: win-x64, executable: AssetRipper.GUI.Free.exe }
+          - { name: win_arm64, os: windows-latest, runtime: win-arm64, executable: AssetRipper.GUI.Free.exe }
+          - { name: linux_x64, os: ubuntu-22.04, runtime: linux-x64, executable: AssetRipper.GUI.Free }
+          - { name: linux_arm64, os: ubuntu-22.04-arm, runtime: linux-arm64, executable: AssetRipper.GUI.Free }
+          - { name: mac_x64, os: macos-14, runtime: osx-x64, executable: AssetRipper.GUI.Free }
+          - { name: mac_arm64, os: macos-14, runtime: osx-arm64, executable: AssetRipper.GUI.Free }
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Publish
+        run: dotnet publish -c Release -r ${{ matrix.config.runtime }}
+        working-directory: ./Source/AssetRipper.GUI.Free/
+
+      - name: Create archive
+        shell: bash
+        working-directory: ./Source/0Bins/AssetRipper.GUI.Free/Release/${{ matrix.config.runtime }}/publish
+        run: |
+          date -u > compile_time.txt
+          echo "${TAG}" > version.txt
+          FILES="${{ matrix.config.executable }} compile_time.txt version.txt $(ls *.dll *.so *.dylib 2>/dev/null | tr '\n' ' ')"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          if [[ "${{ matrix.config.runtime }}" == win-* ]]; then
+            7z a "$GITHUB_WORKSPACE/dist/AssetRipper_UnityCN_${{ matrix.config.name }}.zip" $FILES
+          else
+            tar cvJf "$GITHUB_WORKSPACE/dist/AssetRipper_UnityCN_${{ matrix.config.name }}.tar.xz" $FILES
+          fi
+          ls -la "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AssetRipper_UnityCN_${{ matrix.config.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: publish
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AssetRipper $TAG" \
+            --notes-file .github/release-notes-unitycn.md \
+            --verify-tag
