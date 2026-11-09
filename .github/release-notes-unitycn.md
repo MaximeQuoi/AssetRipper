@@ -8,6 +8,7 @@ Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0
 - **Known keys** from [AnimeStudio](https://github.com/Escartem/AnimeStudio) are tried automatically (Punishing Gray Raven, Neural Cloud, Archeland, Higan: Eruthyll...).
 - Same decryption as AnimeStudio: `#$manjuuunity*!@` signature and `0x1000` flag supported; for Unity versions up to 2022, the ambiguous `0x200` flag is read both ways and the consistent reading is kept.
 - **NetEase protected bundles** (Yidun, `libnesec.so`): the encrypted first block is detected and decrypted automatically, no key needed.
+- The open file limit is raised at startup on Linux and macOS, so large games (thousands of bundles) no longer fail with "Too many open files".
 - Several manual keys can be given, separated by `;`.
 - Environment variables: `ASSETRIPPER_UNITYCN_KEY`, `ASSETRIPPER_UNITYCN_KEYFILE`.
 
