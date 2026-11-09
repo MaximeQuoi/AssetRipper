@@ -429,8 +429,14 @@ public class UnityCnTests
 	/// <summary>
 	/// Builds a minimal UnityFS bundle (version 7, new 0x400 encryption flag) with one encrypted LZ4 block containing one file.
 	/// </summary>
+	internal static byte[] MakeEncryptedBundlePublic(byte[] payload, Func<byte[], byte[]>? transformBlock)
+	{
+		return MakeEncryptedBundle(new byte[16], payload, "2022.3.62f1", flags: 0x40 | 0x200, encrypt: false, padding: true, transformBlock: transformBlock);
+	}
+
 	private static byte[] MakeEncryptedBundle(byte[] key, byte[] payload, string unityVersion,
-		int flags = 0x40 | 0x200 | 0x400, string signatureText = UnityCnDecryptor.Signature, bool encrypt = true, bool padding = true)
+		int flags = 0x40 | 0x200 | 0x400, string signatureText = UnityCnDecryptor.Signature, bool encrypt = true, bool padding = true,
+		Func<byte[], byte[]>? transformBlock = null)
 	{
 		// Encryption tables: index must be a permutation of 0-15 so that a test encryptor exists.
 		byte[] index = new byte[16];
@@ -472,6 +478,10 @@ public class UnityCnTests
 		byte[] compressed = new byte[LZ4Codec.MaximumOutputSize(payload.Length)];
 		int compressedLength = LZ4Codec.Encode(payload, compressed, LZ4Level.L00_FAST);
 		compressed = compressed[..compressedLength];
+		if (transformBlock is not null)
+		{
+			compressed = transformBlock(compressed);
+		}
 		if (encrypt)
 		{
 			EncryptBlock(compressed, 0, index, sub);
@@ -620,3 +630,18 @@ public class UnityCnTests
 		stream.Write(buffer);
 	}
 }
+
+/// <summary>
+/// Gives other test classes access to the bundle builder.
+/// </summary>
+internal static class UnityCnTestsAccess
+{
+	/// <summary>
+	/// A plain (not UnityCN encrypted) single block LZ4 bundle, with an optional transformation of the compressed block.
+	/// </summary>
+	public static byte[] MakeBundle(byte[] payload, Func<byte[], byte[]>? transformBlock)
+	{
+		return UnityCnTests.MakeEncryptedBundlePublic(payload, transformBlock);
+	}
+}
+

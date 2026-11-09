@@ -74,3 +74,11 @@ both readings are tried and the consistent one is kept.
 
 `stringliteral.json` contains every string literal of the code, so it is the best choice when the key is passed directly to
 `AssetBundle.SetAssetBundleDecryptKey("...")`; `dump.cs` only contains the values of `const` fields.
+
+## NetEase protected bundles — fork addition
+
+Games protected by NetEase (Yidun: `libnesec.so`, `libNetHTProtect.so`) encrypt the start of the first block of every bundle.
+Such bundles look like ordinary UnityFS files, but the first block fails to decompress.
+This fork detects the NetEase header (`EE DD` followed by a version such as `0x2022`) when that happens, and decrypts the block.
+No key is needed. The algorithm comes from [AnimeStudio](https://github.com/Escartem/AnimeStudio) (LukeFZ).
+

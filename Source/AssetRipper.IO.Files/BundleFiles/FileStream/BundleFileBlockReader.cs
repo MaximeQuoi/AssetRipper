@@ -1,4 +1,5 @@
-﻿using AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
+﻿using AssetRipper.IO.Files.BundleFiles.FileStream.NetEase;
+using AssetRipper.IO.Files.BundleFiles.FileStream.UnityCn;
 using AssetRipper.IO.Files.Exceptions;
 using AssetRipper.IO.Files.Streams;
 using AssetRipper.IO.Files.Streams.Smart;
@@ -97,7 +98,22 @@ internal sealed class BundleFileBlockReader : IDisposable
 					switch (compressType)
 					{
 						case CompressionType.Lzma:
-							LzmaCompression.DecompressLzmaStream(m_stream, block.CompressedSize, m_cachedBlockStream, block.UncompressedSize);
+							{
+								long lzmaPosition = m_stream.Position;
+								try
+								{
+									LzmaCompression.DecompressLzmaStream(m_stream, block.CompressedSize, m_cachedBlockStream, block.UncompressedSize);
+								}
+								catch (Exception) when (blockIndex == 0)
+								{
+									// NetEase protected bundles encrypt the start of the first block.
+									m_stream.Position = lzmaPosition;
+									byte[] lzmaBytes = new BinaryReader(m_stream).ReadBytes((int)block.CompressedSize);
+									NetEaseDecryptor.DecryptWithoutHeader(lzmaBytes);
+									m_cachedBlockStream.Position = 0;
+									LzmaCompression.DecompressLzmaStream(new MemoryStream(lzmaBytes), block.CompressedSize, m_cachedBlockStream, block.UncompressedSize);
+								}
+							}
 							break;
 
 						case CompressionType.Lz4:
@@ -114,6 +130,11 @@ internal sealed class BundleFileBlockReader : IDisposable
 								m_unityCn.DecryptBlock(compressedBytes, blockIndex);
 							}
 							int bytesWritten = LZ4Codec.Decode(compressedBytes, uncompressedBytes);
+							if (bytesWritten != uncompressedSize && blockIndex == 0 && NetEaseDecryptor.TryDecryptWithHeader(compressedBytes))
+							{
+								// NetEase protected bundles encrypt the start of the first block.
+								bytesWritten = LZ4Codec.Decode(compressedBytes, uncompressedBytes);
+							}
 							if (bytesWritten < 0)
 							{
 								DecompressionFailedException.ThrowNoBytesWritten(entry.PathFixed, compressType);

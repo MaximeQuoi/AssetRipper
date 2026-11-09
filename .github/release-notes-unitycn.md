@@ -1,4 +1,4 @@
-Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0.0 with **UnityCN (Unity China / Tuanjie) encrypted bundle** support.
+Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0.0 with **UnityCN (Unity China / Tuanjie)** and **NetEase** encrypted bundle support.
 
 ## What's new
 
@@ -7,6 +7,7 @@ Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0
 - **Automatic key discovery from Il2CppDumper output**: select `dump.cs` or `stringliteral.json` in *Settings → UnityCN key file*. Every possible key is tried on the encrypted bundles, including **every 32 digit hex key found anywhere in the file** (comments, `0x...` values, longer strings, GUIDs), and the right one(s) are kept, even when a game uses several keys. The keys found are logged and listed on the settings page.
 - **Known keys** from [AnimeStudio](https://github.com/Escartem/AnimeStudio) are tried automatically (Punishing Gray Raven, Neural Cloud, Archeland, Higan: Eruthyll...).
 - Same decryption as AnimeStudio: `#$manjuuunity*!@` signature and `0x1000` flag supported; for Unity versions up to 2022, the ambiguous `0x200` flag is read both ways and the consistent reading is kept.
+- **NetEase protected bundles** (Yidun, `libnesec.so`): the encrypted first block is detected and decrypted automatically, no key needed.
 - Several manual keys can be given, separated by `;`.
 - Environment variables: `ASSETRIPPER_UNITYCN_KEY`, `ASSETRIPPER_UNITYCN_KEYFILE`.
 
