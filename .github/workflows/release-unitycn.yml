@@ -56,6 +56,11 @@ jobs:
         run: dotnet publish -c Release -r ${{ matrix.config.runtime }}
         working-directory: ./Source/AssetRipper.GUI.Free/
 
+      - name: Publish DumpCsToAssemblies
+        shell: bash
+        run: dotnet publish -c Release -r ${{ matrix.config.runtime }} --self-contained -o "../0Bins/AssetRipper.GUI.Free/Release/${{ matrix.config.runtime }}/publish/DumpCsToAssemblies"
+        working-directory: ./Source/AssetRipper.Tools.DumpCsToAssemblies/
+
       - name: Create archive
         shell: bash
         working-directory: ./Source/0Bins/AssetRipper.GUI.Free/Release/${{ matrix.config.runtime }}/publish
@@ -63,7 +68,7 @@ jobs:
           date -u > compile_time.txt
           echo "${TAG}" > version.txt
           shopt -s nullglob
-          FILES=("${{ matrix.config.executable }}" compile_time.txt version.txt *.dll *.so *.dylib)
+          FILES=("${{ matrix.config.executable }}" compile_time.txt version.txt *.dll *.so *.dylib DumpCsToAssemblies)
           echo "Files: ${FILES[*]}"
           mkdir -p "$GITHUB_WORKSPACE/dist"
           if [[ "${{ matrix.config.runtime }}" == win-* ]]; then

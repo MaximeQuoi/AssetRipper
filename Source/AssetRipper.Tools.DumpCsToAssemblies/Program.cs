@@ -19,7 +19,7 @@ internal static partial class Program
 	{
 		if (args.Length < 3)
 		{
-			Console.Error.WriteLine("usage: DumpCsToAssemblies <dump.cs> <Unity editor Contents folder> <output folder> [--sources] [--real <folder of real assemblies>]");
+			Console.Error.WriteLine("usage: DumpCsToAssemblies <dump.cs> <Unity editor Contents folder (macOS) or Editor/Data folder (Windows, Linux)> <output folder> [--sources] [--real <folder of real assemblies>]");
 			return 2;
 		}
 		// English compiler messages: the repairs parse them
