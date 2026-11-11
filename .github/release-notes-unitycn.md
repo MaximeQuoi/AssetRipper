@@ -12,6 +12,16 @@ Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0
 - Several manual keys can be given, separated by `;`.
 - Environment variables: `ASSETRIPPER_UNITYCN_KEY`, `ASSETRIPPER_UNITYCN_KEYFILE`.
 
+## Unity projects of IL2CPP games (new in 2.0.0-unitycn.5)
+
+- **DumpCsToAssemblies** (in the archives, folder `DumpCsToAssemblies`): rebuilds compilable stub assemblies from Il2CppDumper's `dump.cs` when `global-metadata.dat` cannot be read (encrypted). Put them in the game's `Managed` folder: the exported project compiles, MonoBehaviours keep their fields and scripts, with empty method bodies that never throw.
+  `DumpCsToAssemblies <dump.cs> <Unity editor Contents (macOS) or Editor/Data folder> <output> [--sources] [--real <folder>]`.
+  Extension methods, default values, auto-properties and singletons (`Instance`) are kept; `--real` replaces the stubs of packages by their real assemblies (UnityEngine.UI, Timeline...).
+- **Shaders translated from OpenGL ES**: the GLES3 programs of a shader are translated to HLSL, so the exported shaders render instead of being replaced by dummies; shaders that cannot be translated keep their render states (blending, depth, culling, stencil) in the dummy.
+- **Deterministic GUIDs**: an exported asset gets the same GUID in every export (derived from its file and path ID), so a large game can be exported in parts and merged into one project.
+- TextAssets with a non-Unity extension (`.skel`, `.atlas`) are exported with a usable one, so Spine data keeps working.
+- The stubs of UI components that draw no mesh no longer render white rectangles.
+
 ## Downloads
 
 | Platform | File |
