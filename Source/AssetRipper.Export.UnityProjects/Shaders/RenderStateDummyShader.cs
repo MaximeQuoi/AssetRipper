@@ -77,7 +77,13 @@ internal static class RenderStateDummyShader
 			|| blend.DestinationBlend.GetValue<BlendMode>() != BlendMode.Zero;
 	}
 
-	public static void Write(IShader shader, TextWriter writer)
+	public static void Write(IShader shader, TextWriter writer) => Write(shader, writer, null);
+
+	/// <summary>
+	/// Writes the subshaders, with the programs given by <paramref name="programs"/> (an HLSLPROGRAM body per pass)
+	/// instead of the dummy program when available.
+	/// </summary>
+	public static void Write(IShader shader, TextWriter writer, Func<ISerializedPass, string?>? programs)
 	{
 		ISerializedShader parsed = shader.ParsedForm;
 		string? texture = FindProperty(parsed, TextureNames, SerializedPropertyType.Texture)
@@ -95,7 +101,7 @@ internal static class RenderStateDummyShader
 				{
 					continue;
 				}
-				WritePass(passes, pass, texture, color);
+				WritePass(passes, pass, texture, color, programs?.Invoke(pass));
 			}
 			if (passes.Length == 0)
 			{
@@ -163,7 +169,7 @@ internal static class RenderStateDummyShader
 		writer.Write(" }\n");
 	}
 
-	private static void WritePass(StringBuilder sb, ISerializedPass pass, string? texture, string? color)
+	private static void WritePass(StringBuilder sb, ISerializedPass pass, string? texture, string? color, string? program)
 	{
 		ISerializedShaderState state = pass.State;
 		sb.Append("\t\tPass {\n");
@@ -213,7 +219,22 @@ internal static class RenderStateDummyShader
 		{
 			WriteStencil(sb, state);
 		}
-		WriteProgram(sb, texture, color);
+		if (program is not null)
+		{
+			sb.Append("\t\t\tHLSLPROGRAM\n");
+			foreach (string line in program.Split('\n'))
+			{
+				if (line.Length > 0)
+				{
+					sb.Append("\t\t\t").Append(line).Append('\n');
+				}
+			}
+			sb.Append("\t\t\tENDHLSL\n");
+		}
+		else
+		{
+			WriteProgram(sb, texture, color);
+		}
 		sb.Append("\t\t}\n");
 	}
 

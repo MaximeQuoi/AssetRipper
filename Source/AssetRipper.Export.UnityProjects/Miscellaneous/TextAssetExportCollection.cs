@@ -17,6 +17,15 @@ public sealed class TextAssetExportCollection : AssetExportCollection<ITextAsset
 		"cs", "dll", "exe", "bat", "cmd", "ps1", "vbs", "js", "msi", "scr", "com"
 	};
 
+	/// <summary>
+	/// Extensions that the Unity editor imports as TextAsset. Any other extension (eg ".skel", ".atlas", ".lua")
+	/// would be imported as a DefaultAsset, breaking every reference to the TextAsset.
+	/// </summary>
+	private static readonly HashSet<string> UnityTextAssetExtensions = new(StringComparer.OrdinalIgnoreCase)
+	{
+		"txt", "html", "htm", "xml", "bytes", "json", "csv", "yaml", "fnt", "md",
+	};
+
 	public TextAssetExportCollection(TextAssetExporter assetExporter, ITextAsset asset) : base(assetExporter, asset)
 	{
 	}
@@ -30,7 +39,12 @@ public sealed class TextAssetExportCollection : AssetExportCollection<ITextAsset
 			{
 				return TxtExtension;
 			}
-			return extension;
+			if (UnityTextAssetExtensions.Contains(extension))
+			{
+				return extension;
+			}
+			// Not a TextAsset extension for Unity: "x.skel" becomes "x.skel.bytes", "x.atlas" becomes "x.atlas.txt"
+			return GetExtension((ITextAsset)asset);
 		}
 		return ((TextAssetExporter)AssetExporter).ExportMode switch
 		{

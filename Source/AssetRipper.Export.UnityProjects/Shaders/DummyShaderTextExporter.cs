@@ -48,6 +48,7 @@ public sealed class DummyShaderTextExporter : ShaderExporterBase
 
 	public static bool ExportShader(IShader shader, TextWriter writer)
 	{
+		GlslTranslation.GlslDump.TryDump(shader);
 		// Technically, this outputs invalid shader code for Unity 5.5 because HLSLPROGRAM was not introduced until Unity 5.6.
 		if (shader.Has_ParsedForm())
 		{
@@ -56,7 +57,14 @@ public sealed class DummyShaderTextExporter : ShaderExporterBase
 
 			TemplateShader templateShader = TemplateList.GetBestTemplate(shader);
 			writer.Write("\t//DummyShaderTextExporter\n");
-			if (RenderStateDummyShader.ShouldUse(shader))
+			Func<AssetRipper.SourceGenerated.Subclasses.SerializedPass.ISerializedPass, string?>? translated = GlslTranslation.GlslShaderTranslator.TryCreate(shader);
+			if (translated is not null)
+			{
+				// Programs translated from the OpenGL ES code of the game, with the original render state
+				writer.Write("\t//Translated from OpenGL ES\n");
+				RenderStateDummyShader.Write(shader, writer, translated);
+			}
+			else if (RenderStateDummyShader.ShouldUse(shader))
 			{
 				// Transparent UI, particles and effects: keep the original blending, depth and stencil state
 				RenderStateDummyShader.Write(shader, writer);
