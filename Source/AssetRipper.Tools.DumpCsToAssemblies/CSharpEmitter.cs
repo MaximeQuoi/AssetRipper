@@ -139,6 +139,26 @@ internal sealed partial class CSharpEmitter
 		indent = 0;
 		WriteLine("// Generated from dump.cs by AssetRipper.Tools.DumpCsToAssemblies. Method bodies are not available.", null);
 		WriteLine("#pragma warning disable", null);
+		// Singletons: the Instance properties create their object on first use, as the game's do
+		WriteLine("internal static class __StubSingleton", null);
+		WriteLine("{", null);
+		WriteLine("\tpublic static T Create<T>()", null);
+		WriteLine("\t{", null);
+		WriteLine("\t\tglobal::System.Type type = typeof(T);", null);
+		WriteLine("\t\tif (type.IsAbstract || type.IsInterface || type.ContainsGenericParameters) { return default; }", null);
+		WriteLine("\t\tif (typeof(global::UnityEngine.Component).IsAssignableFrom(type))", null);
+		WriteLine("\t\t{", null);
+		WriteLine("\t\t\tif (!global::UnityEngine.Application.isPlaying) { return default; }", null);
+		WriteLine("\t\t\tglobal::UnityEngine.Object existing = global::UnityEngine.Object.FindObjectOfType(type);", null);
+		WriteLine("\t\t\tif (existing != null) { return (T)(object)existing; }", null);
+		WriteLine("\t\t\tglobal::UnityEngine.GameObject go = new global::UnityEngine.GameObject(type.Name);", null);
+		WriteLine("\t\t\tglobal::UnityEngine.Object.DontDestroyOnLoad(go);", null);
+		WriteLine("\t\t\treturn (T)(object)go.AddComponent(type);", null);
+		WriteLine("\t\t}", null);
+		WriteLine("\t\tif (typeof(global::UnityEngine.Object).IsAssignableFrom(type)) { return default; }", null);
+		WriteLine("\t\ttry { return (T)global::System.Activator.CreateInstance(type, true); } catch { return default; }", null);
+		WriteLine("\t}", null);
+		WriteLine("}", null);
 		foreach (IGrouping<string, DumpType> group in image.Types
 			.Where(t => t.DeclaringType is null && !t.IsCompilerGenerated)
 			.GroupBy(t => t.Namespace)
@@ -528,6 +548,35 @@ internal sealed partial class CSharpEmitter
 	[GeneratedRegex(@"^-?[0-9]+(\.[0-9]+)?([Ee][+-]?[0-9]+)?$")]
 	private static partial Regex NumberRegex();
 
+	private static readonly HashSet<string> LiteralTypes = new(StringComparer.Ordinal)
+	{
+		"bool", "byte", "sbyte", "short", "ushort", "int", "uint", "long", "ulong", "float", "double", "decimal", "char", "string",
+		"global::System.Boolean", "global::System.Byte", "global::System.SByte", "global::System.Int16", "global::System.UInt16", "global::System.Int32",
+		"global::System.UInt32", "global::System.Int64", "global::System.UInt64", "global::System.Single", "global::System.Double", "global::System.Char", "global::System.String",
+	};
+
+	/// <summary>
+	/// A default parameter value: the literal for primitive types and strings, otherwise <c>default</c>.
+	/// </summary>
+	private static string DefaultValueLiteral(string value, string resolvedType)
+	{
+		if (value == "null" || !LiteralTypes.Contains(resolvedType))
+		{
+			return "default";
+		}
+		if (value.StartsWith('"') || value.StartsWith('\'') || value is "true" or "false")
+		{
+			return value;
+		}
+		string number = NormalizeNumber(value);
+		return resolvedType switch
+		{
+			"float" or "global::System.Single" => $"unchecked((float){number})",
+			"string" or "global::System.String" => "default",
+			_ => $"unchecked(({resolvedType})({number}))",
+		};
+	}
+
 	/// <summary>
 	/// dump.cs was produced with a French locale: "0,5" means 0.5.
 	/// </summary>
@@ -583,13 +632,44 @@ internal sealed partial class CSharpEmitter
 		bool isAbstract = modifiers.Contains("abstract");
 		bool callBase = modifiers.Contains("override ") && !repair.NoBaseCall.Contains(memberKey) && !property.Modifiers.Contains("static");
 		string name = Escape(property.Name);
-		string getter = property.HasGetter ? (isAbstract ? "get; " : callBase ? $"get => base.{name}; " : "get => default; ") : "";
-		string setter = property.HasSetter ? (isAbstract ? "set; " : callBase ? $"set => base.{name} = value; " : "set { } ") : "";
+		if (IsSingletonInstance(type, property, isAbstract, callBase))
+		{
+			DumpField? holder = type.Fields.FirstOrDefault(f => f.Modifiers.Contains("static") && f.Type == property.Type && IsValidIdentifier(f.Name));
+			string field = holder is not null ? Escape(holder.Name) : "__stubInstance";
+			if (holder is null)
+			{
+				WriteLine($"private static {propertyType} __stubInstance;", info);
+			}
+			string set = property.HasSetter ? $" set => {field} = value;" : "";
+			WriteLine($"{modifiers}{propertyType} {name} {{ get {{ if ({field} == null) {{ {field} = global::__StubSingleton.Create<{propertyType}>(); }} return {field}; }}{set} }}", info);
+			return;
+		}
+		// An auto-property in the game (its backing field is in dump.cs) stays one: data classes keep their values
+		bool isAuto = !isAbstract && !callBase && property.HasGetter && type.Fields.Any(f => f.Name == $"<{property.Name}>k__BackingField");
+		string getter = property.HasGetter ? (isAbstract || isAuto ? "get; " : callBase ? $"get => base.{name}; " : "get => default; ") : "";
+		string setter = property.HasSetter ? (isAbstract || isAuto ? "set; " : callBase ? $"set => base.{name} = value; " : "set { } ") : isAuto ? "private set; " : "";
 		if (getter.Length == 0 && setter.Length == 0)
 		{
 			return;
 		}
 		WriteLine($"{modifiers}{propertyType} {Escape(property.Name)} {{ {getter}{setter}}}", info);
+	}
+
+	/// <summary>
+	/// A static Instance property of the type itself, or of T in a generic singleton base, that is not an auto-property.
+	/// </summary>
+	private static bool IsSingletonInstance(DumpType type, DumpProperty property, bool isAbstract, bool callBase)
+	{
+		if (property.Name != "Instance" || !property.Modifiers.Contains("static") || !property.HasGetter || isAbstract || callBase)
+		{
+			return false;
+		}
+		if (type.Fields.Any(f => f.Name == $"<{property.Name}>k__BackingField") || type.Kind != DumpTypeKind.Class || type.Modifiers.Contains("static"))
+		{
+			return false;
+		}
+		string self = type.GenericParameters.Count == 0 ? type.Name : $"{type.Name}<{string.Join(", ", type.GenericParameters)}>";
+		return property.Type == self || property.Type == type.FullName || type.GenericParameters.Count == 1 && property.Type == type.GenericParameters[0];
 	}
 
 	private void EmitIndexer(DumpType type, DumpMethod? getter, DumpMethod? setter, bool isInterface, LineInfo typeLine)
@@ -681,7 +761,16 @@ internal sealed partial class CSharpEmitter
 			{
 				modifier = "";
 			}
-			parameters.Add(modifier.Length > 0 ? $"{modifier} {resolved} {name}" : $"{resolved} {name}");
+			if (i == 0 && modifier.Length == 0 && method.IsStatic && method.Attributes.Contains("Extension") && type.Modifiers.Contains("static") && type.DeclaringNames.Length == 0 && type.GenericParameters.Count == 0)
+			{
+				modifier = "this";
+			}
+			string declaration = modifier.Length > 0 ? $"{modifier} {resolved} {name}" : $"{resolved} {name}";
+			if (p.DefaultValue is not null && p.Modifier is "" or "in" && method.Parameters.Skip(i + 1).All(n => n.DefaultValue is not null || n.Modifier == "params"))
+			{
+				declaration += " = " + DefaultValueLiteral(p.DefaultValue, resolved);
+			}
+			parameters.Add(declaration);
 		}
 		return string.Join(", ", parameters);
 	}

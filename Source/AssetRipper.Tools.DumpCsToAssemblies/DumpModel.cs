@@ -84,6 +84,10 @@ internal sealed class DumpParameter
 	public required string Modifier { get; init; } // "", "ref", "out", "in", "params"
 	public required string Type { get; init; }
 	public required string Name { get; init; }
+	/// <summary>
+	/// The default value as written by Il2CppDumper, or null.
+	/// </summary>
+	public string? DefaultValue { get; init; }
 }
 
 internal sealed class DumpMethod

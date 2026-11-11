@@ -320,8 +320,10 @@ internal static partial class DumpParser
 			text = text[(close + 1)..].TrimStart();
 		}
 		int equals = IndexOfTopLevel(text, " = ");
+		string? defaultValue = null;
 		if (equals >= 0)
 		{
+			defaultValue = text[(equals + 3)..].Trim();
 			text = text[..equals];
 		}
 		string modifier = "";
@@ -347,7 +349,7 @@ internal static partial class DumpParser
 				modifier = "ref";
 			}
 		}
-		return new DumpParameter { Modifier = modifier, Type = type, Name = name };
+		return new DumpParameter { Modifier = modifier, Type = type, Name = name, DefaultValue = defaultValue };
 	}
 
 	private static (List<string> Modifiers, string Remainder) TakeModifiers(string text)
