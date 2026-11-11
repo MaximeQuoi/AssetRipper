@@ -564,9 +564,14 @@ internal sealed partial class CSharpEmitter
 		{
 			return "default";
 		}
-		if (value.StartsWith('"') || value.StartsWith('\'') || value is "true" or "false")
+		if (value.StartsWith('"') || value.StartsWith('\''))
 		{
 			return value;
+		}
+		// Il2CppDumper writes booleans as True and False
+		if (value.Equals("true", StringComparison.OrdinalIgnoreCase) || value.Equals("false", StringComparison.OrdinalIgnoreCase))
+		{
+			return resolvedType is "bool" or "global::System.Boolean" ? value.ToLowerInvariant() : "default";
 		}
 		string number = NormalizeNumber(value);
 		return resolvedType switch
