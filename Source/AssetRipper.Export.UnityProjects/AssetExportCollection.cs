@@ -75,7 +75,18 @@ public class AssetExportCollection<T> : ExportCollection where T : IUnityObjectB
 		return importer;
 	}
 
-	public override UnityGuid GUID { get; } = UnityGuid.NewGuid();
+	/// <summary>
+	/// Derived from the identity of the asset in the game files, so that exporting the same files again (or a subset
+	/// of them) gives the same GUIDs: exports are reproducible and can be done in parts and merged.
+	/// </summary>
+	public override UnityGuid GUID => guid ??= UnityGuid.Md5Hash(System.Text.Encoding.UTF8.GetBytes(GuidSource.Collection), System.Text.Encoding.UTF8.GetBytes(GuidSource.PathID.ToString(System.Globalization.CultureInfo.InvariantCulture)), "AssetRipper"u8);
+
+	private UnityGuid? guid;
+
+	/// <summary>
+	/// The asset whose identity gives the GUID: a file name (stable for game files) and a path ID.
+	/// </summary>
+	protected virtual (string Collection, long PathID) GuidSource => (Asset.Collection.Name, Asset.PathID);
 	public override IAssetExporter AssetExporter { get; }
 	public override AssetCollection File => Asset.Collection;
 	public override IEnumerable<IUnityObjectBase> Assets

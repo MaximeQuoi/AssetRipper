@@ -34,6 +34,11 @@ public class PrefabExportCollection : AssetsExportCollection<IPrefabInstance>
 	public bool EmitPrefabAsset => Prefab is IPrefabMarker;
 	public override string Name => RootGameObject.Name;
 
+	/// <summary>
+	/// The prefab instance is generated during processing: the root GameObject, from the game files, gives the GUID.
+	/// </summary>
+	protected override (string Collection, long PathID) GuidSource => (RootGameObject.Collection.Name, RootGameObject.PathID);
+
 	protected override IUnityObjectBase CreateImporter(IExportContainer container)
 	{
 		if (EmitPrefabAsset)
