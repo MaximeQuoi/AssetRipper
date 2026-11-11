@@ -19,7 +19,7 @@ internal static partial class Program
 	{
 		if (args.Length < 3)
 		{
-			Console.Error.WriteLine("usage: DumpCsToAssemblies <dump.cs> <Unity editor Contents folder> <output folder> [--sources]");
+			Console.Error.WriteLine("usage: DumpCsToAssemblies <dump.cs> <Unity editor Contents folder> <output folder> [--sources] [--real <folder of real assemblies>]");
 			return 2;
 		}
 		// English compiler messages: the repairs parse them
@@ -29,6 +29,9 @@ internal static partial class Program
 		string unityContents = args[1];
 		string output = args[2];
 		bool writeSources = args.Contains("--sources");
+		// --real <folder>: real assemblies (eg UnityEngine.UI.dll compiled from the com.unity.ugui package) used instead of stubs
+		int realIndex = Array.IndexOf(args, "--real");
+		string? realFolder = realIndex >= 0 && realIndex + 1 < args.Length ? args[realIndex + 1] : null;
 		Directory.CreateDirectory(output);
 
 		Stopwatch sw = Stopwatch.StartNew();
@@ -51,8 +54,20 @@ internal static partial class Program
 		List<MetadataReference> references = UnityReferences(unityContents);
 		Console.WriteLine($"{references.Count} Unity reference assemblies");
 
+		HashSet<string> realAssemblies = new(StringComparer.OrdinalIgnoreCase);
+		if (realFolder is not null)
+		{
+			foreach (string dll in Directory.GetFiles(realFolder, "*.dll"))
+			{
+				realAssemblies.Add(Path.GetFileNameWithoutExtension(dll));
+				references.Add(MetadataReference.CreateFromFile(dll));
+				File.Copy(dll, Path.Combine(output, Path.GetFileName(dll)), true);
+			}
+			Console.WriteLine($"Real assemblies used instead of stubs: {string.Join(", ", realAssemblies)}");
+		}
+
 		TypeResolver resolver = new(images);
-		List<DumpImage> generated = images.Where(i => !IsEngineOrSystem(i.AssemblyName) && i.Types.Count > 0).ToList();
+		List<DumpImage> generated = images.Where(i => !IsEngineOrSystem(i.AssemblyName) && !realAssemblies.Contains(i.AssemblyName) && i.Types.Count > 0).ToList();
 
 		// Dependencies between generated assemblies
 		Dictionary<DumpImage, HashSet<DumpImage>> dependencies = [];
@@ -270,6 +285,14 @@ internal static partial class Program
 					continue;
 				}
 			}
+			// An override whose base call does not compile: fall back to a default body first
+			string lineText = GetLine(source, line);
+			if (lineText.Contains("base.", StringComparison.Ordinal) && repair.NoBaseCall.Add(info.MemberKey))
+			{
+				repair.Log.Add($"default body instead of base call: {info.MemberDescription}: {error.Id}");
+				changed = true;
+				continue;
+			}
 			if (repair.RemovedMembers.Add(info.MemberKey))
 			{
 				repair.Log.Add($"removed {info.MemberDescription}: {error.Id} {message}");
@@ -277,6 +300,17 @@ internal static partial class Program
 			}
 		}
 		return changed;
+	}
+
+	private static string GetLine(string source, int line)
+	{
+		int start = 0;
+		for (int i = 0; i < line && start >= 0; i++)
+		{
+			start = source.IndexOf('\n', start) + 1;
+		}
+		int end = source.IndexOf('\n', start);
+		return end < 0 ? source[start..] : source[start..end];
 	}
 
 	private static bool IsIdentifier(string text) => text.Length > 0 && (char.IsLetter(text[0]) || text[0] == '_') && text.All(c => char.IsLetterOrDigit(c) || c == '_');

@@ -56,7 +56,12 @@ public sealed class DummyShaderTextExporter : ShaderExporterBase
 
 			TemplateShader templateShader = TemplateList.GetBestTemplate(shader);
 			writer.Write("\t//DummyShaderTextExporter\n");
-			if (templateShader != null)
+			if (RenderStateDummyShader.ShouldUse(shader))
+			{
+				// Transparent UI, particles and effects: keep the original blending, depth and stencil state
+				RenderStateDummyShader.Write(shader, writer);
+			}
+			else if (templateShader != null)
 			{
 				writer.Write(templateShader.ShaderText);
 			}

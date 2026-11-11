@@ -16,6 +16,10 @@ internal sealed class RepairState
 	/// </summary>
 	public HashSet<string> RemovedBases { get; } = [];
 	public HashSet<string> NoOverride { get; } = [];
+	/// <summary>
+	/// Overrides whose base call does not compile: they get a default body instead.
+	/// </summary>
+	public HashSet<string> NoBaseCall { get; } = [];
 	public HashSet<string> ForcedAbstract { get; } = [];
 	/// <summary>
 	/// Keys: owner key (type or member) + "|" + generic parameter name.
@@ -220,6 +224,8 @@ internal sealed partial class CSharpEmitter
 		return owners;
 	}
 
+	private static string GenericArguments(IReadOnlyList<string> parameters) => parameters.Count == 0 ? "" : "<" + string.Join(", ", parameters) + ">";
+
 	private string GenericParameterList(IReadOnlyList<string> parameters) => parameters.Count == 0 ? "" : "<" + string.Join(", ", parameters) + ">";
 
 	private string ConstraintClauses(string owner, IReadOnlyList<string> parameters)
@@ -412,6 +418,18 @@ internal sealed partial class CSharpEmitter
 			}
 		}
 
+		// Custom UI graphics that build their mesh elsewhere (eg UI particles): without an override,
+		// Graphic.OnPopulateMesh draws an opaque rectangle over the whole RectTransform.
+		if (type.Kind == DumpTypeKind.Class && !type.IsAbstract && DerivesDirectlyFromGraphic(type)
+			&& !type.Methods.Any(m => m.Name == "OnPopulateMesh" && m.Parameters.Count == 1 && m.Parameters[0].Type == "VertexHelper"))
+		{
+			string memberKey = MemberKey(type, "method", "OnPopulateMesh", 1, "<generated>");
+			if (!repair.RemovedMembers.Contains(memberKey))
+			{
+				WriteLine("protected override void OnPopulateMesh(global::UnityEngine.UI.VertexHelper vh) { vh.Clear(); }", new LineInfo(typeKey, memberKey, $"{type.FullName}.OnPopulateMesh(generated)", typeLine.GenericOwners));
+			}
+		}
+
 		// Nested types
 		foreach (DumpType nested in type.NestedTypes)
 		{
@@ -542,7 +560,7 @@ internal sealed partial class CSharpEmitter
 			string resolvedInterface = resolver.Resolve(interfaceName, type);
 			string explicitType = resolver.Resolve(property.Type, type);
 			LineInfo explicitInfo = new(TypeKey(type), explicitKey, $"{type.FullName}.{property.Name}", typeLine.GenericOwners);
-			WriteLine($"{explicitType} {resolvedInterface}.{Escape(memberName)} {{ {(property.HasGetter ? "get => throw null; " : "")}{(property.HasSetter ? "set { } " : "")}}}", explicitInfo);
+			WriteLine($"{explicitType} {resolvedInterface}.{Escape(memberName)} {{ {(property.HasGetter ? "get => default; " : "")}{(property.HasSetter ? "set { } " : "")}}}", explicitInfo);
 			return;
 		}
 		if (!IsValidIdentifier(property.Name))
@@ -563,8 +581,10 @@ internal sealed partial class CSharpEmitter
 		}
 		string modifiers = MethodModifiers(type, property.Modifiers, memberKey);
 		bool isAbstract = modifiers.Contains("abstract");
-		string getter = property.HasGetter ? (isAbstract ? "get; " : "get => throw null; ") : "";
-		string setter = property.HasSetter ? (isAbstract ? "set; " : "set { } ") : "";
+		bool callBase = modifiers.Contains("override ") && !repair.NoBaseCall.Contains(memberKey) && !property.Modifiers.Contains("static");
+		string name = Escape(property.Name);
+		string getter = property.HasGetter ? (isAbstract ? "get; " : callBase ? $"get => base.{name}; " : "get => default; ") : "";
+		string setter = property.HasSetter ? (isAbstract ? "set; " : callBase ? $"set => base.{name} = value; " : "set { } ") : "";
 		if (getter.Length == 0 && setter.Length == 0)
 		{
 			return;
@@ -592,7 +612,7 @@ internal sealed partial class CSharpEmitter
 		}
 		string modifiers = MethodModifiers(type, reference.Modifiers, memberKey);
 		bool isAbstract = modifiers.Contains("abstract");
-		string get = getter is not null ? (isAbstract ? "get; " : "get => throw null; ") : "";
+		string get = getter is not null ? (isAbstract ? "get; " : "get => default; ") : "";
 		string set = setter is not null ? (isAbstract ? "set; " : "set { } ") : "";
 		WriteLine($"{modifiers}{resolvedValue} this[{parameterList}] {{ {get}{set}}}", info);
 	}
@@ -666,6 +686,48 @@ internal sealed partial class CSharpEmitter
 		return string.Join(", ", parameters);
 	}
 
+	/// <summary>
+	/// The parameter names used by <see cref="ParameterList"/>.
+	/// </summary>
+	private static List<(string Modifier, string Name)> ParameterNames(DumpMethod method)
+	{
+		HashSet<string> names = [];
+		List<(string, string)> result = [];
+		for (int i = 0; i < method.Parameters.Count; i++)
+		{
+			DumpParameter p = method.Parameters[i];
+			string name = SafeParameterName(p.Name, i);
+			if (!names.Add(name))
+			{
+				name = "p" + i;
+				names.Add(name);
+			}
+			result.Add((p.Modifier, name));
+		}
+		return result;
+	}
+
+	/// <summary>
+	/// A body that does nothing: out parameters are assigned, non-void methods return default.
+	/// Stubs must not throw: Unity calls Awake, OnEnable, OnPopulateMesh... on components.
+	/// </summary>
+	private static string DefaultBody(DumpMethod method, bool returnsValue)
+	{
+		IEnumerable<string> outAssignments = ParameterNames(method).Where(p => p.Modifier == "out").Select(p => $"{p.Name} = default; ");
+		string assignments = string.Concat(outAssignments);
+		return returnsValue ? $" {{ {assignments}return default; }}" : $" {{ {assignments}}}";
+	}
+
+	/// <summary>
+	/// Overrides call the base implementation, so that components keep the behaviour of their Unity base class.
+	/// </summary>
+	private static string BaseCallBody(DumpMethod method, string name, string generics, bool returnsValue)
+	{
+		string arguments = string.Join(", ", ParameterNames(method).Select(p => p.Modifier is "ref" or "out" or "in" ? $"{p.Modifier} {p.Name}" : p.Name));
+		string call = $"base.{name}{generics}({arguments})";
+		return returnsValue ? $" => {call};" : $" {{ {call}; }}";
+	}
+
 	private static string Signature(DumpMethod method) => string.Join(",", method.Parameters.Select(p => p.Modifier + p.Type));
 
 	/// <summary>
@@ -712,7 +774,7 @@ internal sealed partial class CSharpEmitter
 		string resolvedInterface = resolver.Resolve(interfaceName, type);
 		string returnType = resolver.Resolve(method.ReturnType, type, method.GenericParameters);
 		string parameters = ParameterList(method, type, method.GenericParameters);
-		WriteLine($"{returnType} {resolvedInterface}.{Escape(memberName)}{GenericParameterList(method.GenericParameters)}({parameters}) => throw null;", info);
+		WriteLine($"{returnType} {resolvedInterface}.{Escape(memberName)}{GenericParameterList(method.GenericParameters)}({parameters}){DefaultBody(method, returnType != "void")}", info);
 	}
 
 	private void EmitMethod(DumpType type, DumpMethod method, bool isInterface, LineInfo typeLine)
@@ -756,8 +818,28 @@ internal sealed partial class CSharpEmitter
 			OwnerParameters[memberKey] = method.GenericParameters;
 		}
 		string constraints = isOverride ? "" : ConstraintClauses(memberKey, method.GenericParameters);
-		string body = modifiers.Contains("abstract ") ? ";" : " => throw null;";
+		bool returnsValue = returnType != "void";
+		if (isOverride && method.Name == "OnPopulateMesh" && method.Parameters.Count == 1 && DerivesDirectlyFromGraphic(type))
+		{
+			// Custom UI graphics (UI particles, gradients...): Graphic.OnPopulateMesh would draw an opaque rectangle.
+			string mesh = ParameterNames(method)[0].Name;
+			WriteLine($"{modifiers}{returnType} {Escape(method.Name)}({parameters}) {{ {mesh}.Clear(); }}", info);
+			return;
+		}
+		string body = modifiers.Contains("abstract ") ? ";"
+			: isOverride && !repair.NoBaseCall.Contains(memberKey) ? BaseCallBody(method, Escape(method.Name), GenericArguments(method.GenericParameters), returnsValue)
+			: DefaultBody(method, returnsValue);
 		WriteLine($"{modifiers}{returnType} {Escape(method.Name)}{generics}({parameters}){constraints}{body}", info);
+	}
+
+	private bool DerivesDirectlyFromGraphic(DumpType type)
+	{
+		if (type.BaseTypes.Count == 0)
+		{
+			return false;
+		}
+		string resolved = resolver.Resolve(type.BaseTypes[0], type.DeclaringType ?? type);
+		return resolved is "global::UnityEngine.UI.Graphic" or "global::UnityEngine.UI.MaskableGraphic";
 	}
 
 	private bool EmitConstructor(DumpType type, DumpMethod method, LineInfo typeLine)
@@ -778,7 +860,8 @@ internal sealed partial class CSharpEmitter
 		LineInfo info = new(TypeKey(type), memberKey, $"{type.FullName}..ctor({Signature(method)})", typeLine.GenericOwners);
 		string parameters = ParameterList(method, type, null);
 		string baseCall = type.Kind == DumpTypeKind.Class ? BaseConstructorCall(type) ?? "" : "";
-		string body = method.Parameters.Any(p => p.Modifier == "out") || type.Kind == DumpTypeKind.Struct ? "{ throw null; }" : "{ }";
+		string outAssignments = string.Concat(ParameterNames(method).Where(p => p.Modifier == "out").Select(p => $"{p.Name} = default; "));
+		string body = type.Kind == DumpTypeKind.Struct ? $"{{ this = default; {outAssignments}}}" : $"{{ {outAssignments}}}";
 		WriteLine($"{Access(method.Modifiers, false)} {type.Name}({parameters}){baseCall} {body}", info);
 		return true;
 	}
