@@ -1,0 +1,102 @@
+namespace AssetRipper.Tools.DumpCsToAssemblies;
+
+internal sealed class DumpImage
+{
+	public required string Name { get; init; }
+	public required int FirstTypeIndex { get; init; }
+	public string AssemblyName => Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? Name[..^4] : Name;
+	public List<DumpType> Types { get; } = [];
+}
+
+internal enum DumpTypeKind
+{
+	Class,
+	Struct,
+	Enum,
+	Interface,
+}
+
+internal sealed class DumpType
+{
+	public required int Index { get; init; }
+	public required string Namespace { get; set; }
+	/// <summary>
+	/// Simple name without generic parameters, eg "Inner" for "Outer.Inner&lt;T&gt;".
+	/// </summary>
+	public required string Name { get; init; }
+	/// <summary>
+	/// The names of the declaring types, outermost first, eg ["Outer"].
+	/// </summary>
+	public required string[] DeclaringNames { get; init; }
+	public required List<string> GenericParameters { get; init; }
+	public required DumpTypeKind Kind { get; init; }
+	public required List<string> Modifiers { get; init; }
+	public required List<string> BaseTypes { get; init; }
+	public required List<string> Attributes { get; init; }
+	public required DumpImage Image { get; init; }
+	public List<DumpField> Fields { get; } = [];
+	public List<DumpProperty> Properties { get; } = [];
+	public List<DumpMethod> Methods { get; } = [];
+	public List<DumpType> NestedTypes { get; } = [];
+	public DumpType? DeclaringType { get; set; }
+
+	public bool IsCompilerGenerated => Name.Contains('<') || Name.Contains('>') || Name.Contains('$') || DeclaringNames.Any(n => n.Contains('<'));
+	public bool IsStatic => Modifiers.Contains("static");
+	public bool IsAbstract => Modifiers.Contains("abstract");
+
+	/// <summary>
+	/// Full name with nested types separated by dots, without generic arguments.
+	/// </summary>
+	public string FullName
+	{
+		get
+		{
+			string nested = string.Join('.', [.. DeclaringNames, Name]);
+			return string.IsNullOrEmpty(Namespace) ? nested : $"{Namespace}.{nested}";
+		}
+	}
+
+	public override string ToString() => $"{FullName} ({Image.Name})";
+}
+
+internal sealed class DumpField
+{
+	public required List<string> Modifiers { get; init; }
+	public required string Type { get; init; }
+	public required string Name { get; init; }
+	public string? Value { get; init; }
+	public required List<string> Attributes { get; init; }
+}
+
+internal sealed class DumpProperty
+{
+	public required List<string> Modifiers { get; init; }
+	public required string Type { get; init; }
+	public required string Name { get; init; }
+	public required bool HasGetter { get; init; }
+	public required bool HasSetter { get; init; }
+}
+
+internal sealed class DumpParameter
+{
+	public required string Modifier { get; init; } // "", "ref", "out", "in", "params"
+	public required string Type { get; init; }
+	public required string Name { get; init; }
+}
+
+internal sealed class DumpMethod
+{
+	public required List<string> Modifiers { get; init; }
+	public required string ReturnType { get; init; }
+	/// <summary>
+	/// Name without generic parameters.
+	/// </summary>
+	public required string Name { get; init; }
+	public required List<string> GenericParameters { get; init; }
+	public required List<DumpParameter> Parameters { get; init; }
+	public required List<string> Attributes { get; init; }
+	public bool IsConstructor => Name == ".ctor";
+	public bool IsStaticConstructor => Name == ".cctor";
+	public bool IsAbstract => Modifiers.Contains("abstract");
+	public bool IsStatic => Modifiers.Contains("static");
+}
