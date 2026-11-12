@@ -12,6 +12,12 @@ Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0
 - Several manual keys can be given, separated by `;`.
 - Environment variables: `ASSETRIPPER_UNITYCN_KEY`, `ASSETRIPPER_UNITYCN_KEYFILE`.
 
+## Animations in the direct export (new in 2.0.0-unitycn.7)
+
+- **Animation clips in GLB files**: the clips of a model's Animator controller (override controllers included) or legacy Animation component are written as glTF animations, sampled from the Unity curves (position, rotation, euler, scale). A character's GLB plays its clips in Blender, three.js or any glTF viewer.
+- **Imported animation files** (`model@take`) whose bones were stripped: the skeleton is rebuilt from the Avatar, in its pose, so the take plays on it. When a file holds the clips of several models, each model gets the clip that fits its skeleton.
+- Humanoid (muscle) clips are not converted yet.
+
 ## Models in the direct export (new in 2.0.0-unitycn.6)
 
 - **Skinned meshes in GLB files**: the primary content (direct) export now writes the meshes of `SkinnedMeshRenderer`s with their skeleton (joints and inverse bind matrices from the bind poses). Characters and animated models no longer come out invisible, as a bare bone hierarchy. When the skeleton cannot be used, the mesh is still exported in its bind pose.

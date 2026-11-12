@@ -44,6 +44,7 @@ public static class GlbLevelBuilder
 
 				AddGameObjectToScene(sceneBuilder, parameters, null, Transformation.Identity, Transformation.Identity, root.GetTransform());
 				AddSkinnedMeshesToScene(sceneBuilder, parameters);
+				GlbAnimationBuilder.AddAnimations(root, parameters.Nodes, parameters.AnimationNames, parameters.MakeUniqueNodeName);
 
 				foreach (IEditorExtension exportedAsset in root.FetchHierarchy())
 				{
@@ -266,9 +267,10 @@ public static class GlbLevelBuilder
 		Dictionary<ITransform, NodeBuilder> Nodes,
 		List<(ISkinnedMeshRenderer, NodeBuilder)> SkinnedRenderers,
 		Dictionary<string, int> NodeNames,
+		HashSet<string> AnimationNames,
 		bool IsScene)
 	{
-		public BuildParameters(bool isScene) : this(new MaterialBuilder("DefaultMaterial"), new(), new(), new(), new(), new(), new(), isScene) { }
+		public BuildParameters(bool isScene) : this(new MaterialBuilder("DefaultMaterial"), new(), new(), new(), new(), new(), new(), new(), isScene) { }
 
 		public string MakeUniqueNodeName(string name)
 		{
