@@ -1,17 +1,19 @@
-﻿using Microsoft.Win32.SafeHandles;
-
-namespace AssetRipper.IO.Files.Streams;
+﻿namespace AssetRipper.IO.Files.Streams;
 
 /// <summary>
-/// Read a slice of a file using a SafeFileHandle directly with System.IO.RandomAccess.
+/// Read a slice of a file with System.IO.RandomAccess.
 /// This allows a container file with multiple logical files (eg, AssetBundles)
 /// to be streamed as if they are separate files, without buffering the entire file at once.
 /// </summary>
+/// <remarks>
+/// The file is either an open <see cref="FileStream"/> or a <see cref="PooledFile"/>,
+/// whose operating system handle is only kept open while the pool has room for it.
+/// </remarks>
 internal sealed class RandomAccessStream : Stream
 {
-	public SafeFileHandle Handle { get; }
+	private const int BufferSize = 4096;
 
-	public FileStream Parent { get; }
+	public RandomAccessSource Source { get; }
 
 	public long BaseOffset { get; }
 
@@ -19,6 +21,13 @@ internal sealed class RandomAccessStream : Stream
 	/// Raw position in file.
 	/// </summary>
 	private long position = 0;
+
+	/// <summary>
+	/// Small reads (headers, metadata) are served from this buffer, filled with one read of the file.
+	/// </summary>
+	private byte[]? buffer;
+	private long bufferStart;
+	private int bufferLength;
 
 	public override bool CanRead => true;
 
@@ -35,14 +44,17 @@ internal sealed class RandomAccessStream : Stream
 		set => position = value + BaseOffset;
 	}
 
-	public RandomAccessStream(FileStream parent, long offset, long length)
+	public RandomAccessStream(FileStream parent, long offset, long length) : this(new FileStreamSource(parent), offset, length)
 	{
-		if (parent.Length < offset + length)
+	}
+
+	public RandomAccessStream(RandomAccessSource source, long offset, long length)
+	{
+		if (source.Length < offset + length)
 		{
 			throw new ArgumentException("The parent stream is not long enough for the given offset and length.");
 		}
-		Parent = parent;
-		Handle = parent.SafeFileHandle;
+		Source = source;
 		BaseOffset = offset;
 		Length = length;
 		position = BaseOffset;
@@ -58,30 +70,50 @@ internal sealed class RandomAccessStream : Stream
 		return Read(buffer.AsSpan(offset, count));
 	}
 
-	public override int Read(Span<byte> buffer)
+	public override int Read(Span<byte> destination)
 	{
-		long toRead = Math.Max(Math.Min(buffer.Length, Length - Position), 0);
-		int read = RandomAccess.Read(Handle, buffer[..(int)toRead], position);
+		long toRead = Math.Max(Math.Min(destination.Length, Length - Position), 0);
+		if (toRead == 0)
+		{
+			return 0;
+		}
+		destination = destination[..(int)toRead];
+
+		if (destination.Length < BufferSize)
+		{
+			if (buffer is null || position < bufferStart || position + destination.Length > bufferStart + bufferLength)
+			{
+				FillBuffer();
+			}
+			int available = (int)Math.Min(destination.Length, bufferStart + bufferLength - position);
+			if (available > 0)
+			{
+				buffer.AsSpan((int)(position - bufferStart), available).CopyTo(destination);
+				position += available;
+				return available;
+			}
+			return 0;
+		}
+
+		int read = Source.Read(destination, position);
 		position += read;
 		return read;
 	}
 
+	[MemberNotNull(nameof(buffer))]
+	private void FillBuffer()
+	{
+		buffer ??= new byte[BufferSize];
+		long end = BaseOffset + Length;
+		int size = (int)Math.Min(BufferSize, end - position);
+		bufferStart = position;
+		bufferLength = size > 0 ? Source.Read(buffer.AsSpan(0, size), position) : 0;
+	}
+
 	public override int ReadByte()
 	{
-		if (Position >= Length)
-		{
-			return -1;
-		}
-
 		Span<byte> result = stackalloc byte[1];
-		int read = RandomAccess.Read(Handle, result, position);
-		if (read > 0)
-		{
-			position += read;
-			return result[0];
-		}
-
-		return -1;
+		return Read(result) == 1 ? result[0] : -1;
 	}
 
 	public override long Seek(long offset, SeekOrigin origin)
@@ -111,9 +143,31 @@ internal sealed class RandomAccessStream : Stream
 		throw new NotSupportedException();
 	}
 
-
-	~RandomAccessStream()
+	protected override void Dispose(bool disposing)
 	{
-		GC.KeepAlive(Parent);
+		buffer = null;
+		base.Dispose(disposing);
+	}
+}
+
+/// <summary>
+/// A file read at given offsets.
+/// </summary>
+internal abstract class RandomAccessSource
+{
+	public abstract long Length { get; }
+
+	public abstract int Read(Span<byte> destination, long fileOffset);
+}
+
+internal sealed class FileStreamSource(FileStream stream) : RandomAccessSource
+{
+	public FileStream Stream { get; } = stream;
+
+	public override long Length => Stream.Length;
+
+	public override int Read(Span<byte> destination, long fileOffset)
+	{
+		return RandomAccess.Read(Stream.SafeFileHandle, destination, fileOffset);
 	}
 }

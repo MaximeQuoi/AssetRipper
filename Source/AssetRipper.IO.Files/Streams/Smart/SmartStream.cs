@@ -21,7 +21,7 @@ public sealed partial class SmartStream : Stream
 
 	public static SmartStream OpenRead(string path, FileSystem fileSystem)
 	{
-		return new SmartStream(fileSystem.File.OpenRead(path));
+		return new SmartStream(fileSystem is LocalFileSystem ? PooledFile.OpenRead(path) : fileSystem.File.OpenRead(path));
 	}
 
 	public static SmartStream OpenReadMulti(string path, FileSystem fileSystem)
@@ -105,10 +105,11 @@ public sealed partial class SmartStream : Stream
 		{
 			// root case
 			FileStream fileStream => new RandomAccessStream(fileStream, offset, size),
+			_ when PooledFile.GetFile(Stream) is { } pooledFile => new RandomAccessStream(pooledFile, offset, size),
 
 			// branch case
 			RandomAccessStream parentPartial => new RandomAccessStream(
-				parentPartial.Parent,
+				parentPartial.Source,
 				parentPartial.BaseOffset + offset,
 				size),
 

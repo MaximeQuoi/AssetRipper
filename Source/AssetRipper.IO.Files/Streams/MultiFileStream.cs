@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
 namespace AssetRipper.IO.Files.Streams;
 
@@ -75,7 +75,7 @@ public sealed partial class MultiFileStream : Stream
 		}
 		else if (fileSystem.File.Exists(path))
 		{
-			return fileSystem.File.OpenRead(path);
+			return fileSystem is LocalFileSystem ? PooledFile.OpenRead(path) : fileSystem.File.OpenRead(path);
 		}
 		else
 		{
@@ -186,7 +186,7 @@ public sealed partial class MultiFileStream : Stream
 		{
 			for (int i = 0; i < splitFiles.Length; i++)
 			{
-				Stream stream = fileSystem.File.OpenRead(splitFiles[i]);
+				Stream stream = fileSystem is LocalFileSystem ? PooledFile.OpenRead(splitFiles[i]) : fileSystem.File.OpenRead(splitFiles[i]);
 				streams[i] = stream;
 			}
 

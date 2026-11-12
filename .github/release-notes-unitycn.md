@@ -12,6 +12,12 @@ Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0
 - Several manual keys can be given, separated by `;`.
 - Environment variables: `ASSETRIPPER_UNITYCN_KEY`, `ASSETRIPPER_UNITYCN_KEYFILE`.
 
+## No more "Too many open files" on Linux and macOS (new in 2.0.0-unitycn.8)
+
+- Game files are read through a **pool of at most 128 file handles**: a file is reopened on demand instead of staying open until the end of the export. The data of an uncompressed bundle used to keep its file open, one handle per bundle, which exceeded the Linux limit with large games (the full test game, 14,000 bundles, now loads with a hard limit of 512 open files).
+- Managed assemblies are read into memory instead of staying open.
+- The open file limit is raised to the system maximum (`/proc/sys/fs/nr_open` on Linux, raising the hard limit too when allowed; `kern.maxfilesperproc` on macOS), and the result is logged.
+
 ## Animations in the direct export (new in 2.0.0-unitycn.7)
 
 - **Animation clips in GLB files**: the clips of a model's Animator controller (override controllers included) or legacy Animation component are written as glTF animations, sampled from the Unity curves (position, rotation, euler, scale). A character's GLB plays its clips in Blender, three.js or any glTF viewer.

@@ -47,7 +47,8 @@ public class BaseManager : IAssemblyManager
 
 	public AssemblyDefinition Load(string filePath, FileSystem fileSystem)
 	{
-		Stream stream = fileSystem.File.OpenRead(filePath);
+		// Read into memory: the assembly is read lazily, and keeping every file open adds to the open file count
+		Stream stream = new MemoryStream(fileSystem.File.ReadAllBytes(filePath), writable: false);
 		try
 		{
 			return Read(stream, filePath);
