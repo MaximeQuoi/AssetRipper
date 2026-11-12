@@ -5,6 +5,7 @@ using AssetRipper.Export.Modules.Textures;
 using AssetRipper.Numerics;
 using AssetRipper.Primitives;
 using AssetRipper.SourceGenerated.Classes.ClassID_1;
+using AssetRipper.SourceGenerated.Classes.ClassID_137;
 using AssetRipper.SourceGenerated.Classes.ClassID_18;
 using AssetRipper.SourceGenerated.Classes.ClassID_2;
 using AssetRipper.SourceGenerated.Classes.ClassID_21;
@@ -22,6 +23,7 @@ using SharpGLTF.Materials;
 using SharpGLTF.Memory;
 using SharpGLTF.Scenes;
 using System.Buffers;
+using System.Numerics;
 
 namespace AssetRipper.Export.Modules.Models;
 
@@ -41,6 +43,7 @@ public static class GlbLevelBuilder
 				IGameObject root = GetRoot(asset);
 
 				AddGameObjectToScene(sceneBuilder, parameters, null, Transformation.Identity, Transformation.Identity, root.GetTransform());
+				AddSkinnedMeshesToScene(sceneBuilder, parameters);
 
 				foreach (IEditorExtension exportedAsset in root.FetchHierarchy())
 				{
@@ -65,7 +68,9 @@ public static class GlbLevelBuilder
 		Transformation globalTransform = localTransform * parentGlobalTransform;
 		Transformation globalInverseTransform = parentGlobalInverseTransform * localInverseTransform;
 
-		NodeBuilder node = parentNode is null ? new NodeBuilder(gameObject.Name) : parentNode.CreateNode(gameObject.Name);
+		//Node names must be unique in a tree for SharpGLTF to accept a skin over it
+		string nodeName = parameters.MakeUniqueNodeName(gameObject.Name);
+		NodeBuilder node = parentNode is null ? new NodeBuilder(nodeName) : parentNode.CreateNode(nodeName);
 		if (parentNode is not null || parameters.IsScene)
 		{
 			node.LocalTransform = new SharpGLTF.Transforms.AffineTransform(
@@ -74,8 +79,14 @@ public static class GlbLevelBuilder
 				GlbCoordinateConversion.ToGltfVector3Convert(transform.LocalPosition_C4));
 		}
 		sceneBuilder.AddNode(node);
+		parameters.Nodes[transform] = node;
 
-		if (gameObject.TryGetComponent(out IMeshFilter? meshFilter)
+		if (gameObject.TryGetComponent(out ISkinnedMeshRenderer? skinnedMeshRenderer))
+		{
+			//Bones can be anywhere in the hierarchy, so skinned meshes are added once every node exists.
+			parameters.SkinnedRenderers.Add((skinnedMeshRenderer, node));
+		}
+		else if (gameObject.TryGetComponent(out IMeshFilter? meshFilter)
 			&& meshFilter.TryGetMesh(out IMesh? mesh)
 			&& mesh.IsSet()
 			&& parameters.TryGetOrMakeMeshData(mesh, out MeshData meshData))
@@ -99,6 +110,88 @@ public static class GlbLevelBuilder
 		{
 			AddGameObjectToScene(sceneBuilder, parameters, node, localTransform * parentGlobalTransform, parentGlobalInverseTransform * localInverseTransform, childTransform);
 		}
+	}
+
+	private static void AddSkinnedMeshesToScene(SceneBuilder sceneBuilder, BuildParameters parameters)
+	{
+		foreach ((ISkinnedMeshRenderer renderer, NodeBuilder node) in parameters.SkinnedRenderers)
+		{
+			if (renderer.MeshP is not IMesh mesh
+				|| !mesh.IsSet()
+				|| !parameters.TryGetOrMakeMeshData(mesh, out MeshData meshData))
+			{
+				continue;
+			}
+
+			MaterialList materialList = new MaterialList(renderer);
+			if (TryGetJoints(renderer, parameters, meshData, out (NodeBuilder, Matrix4x4)[]? joints))
+			{
+				IMeshBuilder<MaterialBuilder> meshBuilder = BuildAllSubMeshes(parameters, mesh, meshData, materialList);
+				sceneBuilder.AddSkinnedMesh(meshBuilder, joints);
+			}
+			else
+			{
+				//No usable skeleton: the mesh in its bind pose, without skin attributes
+				MeshData rigidMeshData = meshData with { Skin = null };
+				IMeshBuilder<MaterialBuilder> meshBuilder = BuildAllSubMeshes(parameters, mesh, rigidMeshData, materialList);
+				sceneBuilder.AddRigidMesh(meshBuilder, node);
+			}
+		}
+		parameters.SkinnedRenderers.Clear();
+	}
+
+	private static bool TryGetJoints(ISkinnedMeshRenderer renderer, BuildParameters parameters, MeshData meshData, [NotNullWhen(true)] out (NodeBuilder, Matrix4x4)[]? joints)
+	{
+		joints = null;
+		Matrix4x4[]? bindPoses = meshData.BindPose;
+		int boneCount = renderer.Bones.Count;
+		if (!meshData.HasSkin || bindPoses is null || boneCount == 0 || bindPoses.Length < boneCount)
+		{
+			return false;
+		}
+
+		int maxIndex = 0;
+		foreach (BoneWeight4 weight in meshData.Skin)
+		{
+			maxIndex = Math.Max(maxIndex, Math.Max(Math.Max(weight.Index0, weight.Index1), Math.Max(weight.Index2, weight.Index3)));
+		}
+		if (maxIndex >= boneCount)
+		{
+			return false;
+		}
+
+		joints = new (NodeBuilder, Matrix4x4)[boneCount];
+		for (int i = 0; i < boneCount; i++)
+		{
+			if (renderer.Bones[i].TryGetAsset(renderer.Collection) is not ITransform bone
+				|| !parameters.Nodes.TryGetValue(bone, out NodeBuilder? boneNode))
+			{
+				joints = null;
+				return false;
+			}
+			joints[i] = (boneNode, ToGltfMatrix(bindPoses[i]));
+		}
+		return true;
+	}
+
+	/// <summary>
+	/// Converts a Unity matrix (as cast by <see cref="Matrix4x4fExtensions.CastToStruct"/>, row-vector convention) to glTF space.
+	/// </summary>
+	private static Matrix4x4 ToGltfMatrix(Matrix4x4 unityMatrix)
+	{
+		Matrix4x4 flip = Matrix4x4.CreateScale(GlbCoordinateConversion.CoordinateSpaceConversionScale);
+		return flip * unityMatrix * flip;
+	}
+
+	private static IMeshBuilder<MaterialBuilder> BuildAllSubMeshes(BuildParameters parameters, IMesh mesh, MeshData meshData, MaterialList materialList)
+	{
+		AccessListBase<ISubMesh> subMeshes = mesh.SubMeshes;
+		(ISubMesh, MaterialBuilder)[] subMeshArray = new (ISubMesh, MaterialBuilder)[subMeshes.Count];
+		for (int i = 0; i < subMeshes.Count; i++)
+		{
+			subMeshArray[i] = (subMeshes[i], parameters.GetOrMakeMaterial(materialList[i]));
+		}
+		return GlbSubMeshBuilder.BuildSubMeshes(new ArraySegment<(ISubMesh, MaterialBuilder)>(subMeshArray), mesh.Is16BitIndices(), meshData, Transformation.Identity, Transformation.Identity);
 	}
 
 	private static void AddDynamicMeshToScene(SceneBuilder sceneBuilder, BuildParameters parameters, NodeBuilder node, IMesh mesh, MeshData meshData, MaterialList materialList)
@@ -170,9 +263,29 @@ public static class GlbLevelBuilder
 		Dictionary<ITexture2D, MemoryImage> ImageCache,
 		Dictionary<IMaterial, MaterialBuilder> MaterialCache,
 		Dictionary<IMesh, MeshData> MeshCache,
+		Dictionary<ITransform, NodeBuilder> Nodes,
+		List<(ISkinnedMeshRenderer, NodeBuilder)> SkinnedRenderers,
+		Dictionary<string, int> NodeNames,
 		bool IsScene)
 	{
-		public BuildParameters(bool isScene) : this(new MaterialBuilder("DefaultMaterial"), new(), new(), new(), isScene) { }
+		public BuildParameters(bool isScene) : this(new MaterialBuilder("DefaultMaterial"), new(), new(), new(), new(), new(), new(), isScene) { }
+
+		public string MakeUniqueNodeName(string name)
+		{
+			if (NodeNames.TryAdd(name, 1))
+			{
+				return name;
+			}
+			while (true)
+			{
+				int count = NodeNames[name]++;
+				string candidate = $"{name}_{count}";
+				if (NodeNames.TryAdd(candidate, 1))
+				{
+					return candidate;
+				}
+			}
+		}
 		public bool TryGetOrMakeMeshData(IMesh mesh, out MeshData meshData)
 		{
 			if (MeshCache.TryGetValue(mesh, out meshData))
@@ -262,12 +375,12 @@ public static class GlbLevelBuilder
 
 		private static bool IsMainTexture(string textureName)
 		{
-			return textureName is "_MainTex" or "texture" or "Texture" or "_Texture";
+			return textureName is "_MainTex" or "texture" or "Texture" or "_Texture" or "_BaseMap" or "_BaseColorMap" or "_Albedo" or "_AlbedoMap";
 		}
 
 		private static bool IsNormalTexture(string textureName)
 		{
-			return textureName is "_Normal" or "Normal" or "normal";
+			return textureName is "_Normal" or "Normal" or "normal" or "_BumpMap" or "_NormalMap";
 		}
 	}
 
