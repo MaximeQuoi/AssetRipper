@@ -12,6 +12,12 @@ Unofficial fork of [AssetRipper](https://github.com/AssetRipper/AssetRipper) 2.0
 - Several manual keys can be given, separated by `;`.
 - Environment variables: `ASSETRIPPER_UNITYCN_KEY`, `ASSETRIPPER_UNITYCN_KEYFILE`.
 
+## Models in the direct export (new in 2.0.0-unitycn.6)
+
+- **Skinned meshes in GLB files**: the primary content (direct) export now writes the meshes of `SkinnedMeshRenderer`s with their skeleton (joints and inverse bind matrices from the bind poses). Characters and animated models no longer come out invisible, as a bare bone hierarchy. When the skeleton cannot be used, the mesh is still exported in its bind pose.
+- Node names are made unique in each model, as glTF skins require.
+- `_BumpMap` / `_NormalMap` are exported as normal maps, `_BaseMap` / `_Albedo` as base color.
+
 ## Unity projects of IL2CPP games (new in 2.0.0-unitycn.5)
 
 - **DumpCsToAssemblies** (in the archives, folder `DumpCsToAssemblies`): rebuilds compilable stub assemblies from Il2CppDumper's `dump.cs` when `global-metadata.dat` cannot be read (encrypted). Put them in the game's `Managed` folder: the exported project compiles, MonoBehaviours keep their fields and scripts, with empty method bodies that never throw.
